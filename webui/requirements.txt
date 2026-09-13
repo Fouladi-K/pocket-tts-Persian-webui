@@ -1,0 +1,4 @@
+pocket-tts
+gradio
+scipy
+numpy
