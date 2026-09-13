@@ -1,7 +1,12 @@
+
+  
 > **This is a fork of [mallahyari/pocket-tts](https://github.com/mallahyari/pocket-tts).**
 > It adds a streaming Gradio web UI for the Persian (Farsi) model.
 > See `/webui/farsi_webui.py` for the implementation.
+## Components
 
+- **[`webui/`](webui/README.md)** — Streaming Gradio web interface for the
+  Persian (Farsi) model
 ---
 
 # Pocket TTS
