@@ -24,6 +24,7 @@ Then listen to ezafe_ab/a_g2p.wav against ezafe_ab/b_corrected.wav.
 from __future__ import annotations
 
 import difflib
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,16 @@ sys.path.insert(0, str(REPO))
 DEFAULT_CONFIG = "hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml"
 G2P_ID = "mehdi-hf/Homo-GE2PE-Persian-HF"
 TO_PHONEMES = str.maketrans({"/": "a", "a": "A", "@": "?", "$": "S", "c": "C"})
+
+# The Space splits on clause punctuation BEFORE phonemising, because G2P discards
+# it. That changes what G2P sees, and its ezafe decisions are context-dependent:
+# on one test sentence the whole-sentence pass produced "CandbarAbariye qeymate"
+# (correct) where per-clause dropped the ezafe, while per-clause produced
+# "tarke tahsile dAneSAmuzAn" (correct) where whole-sentence added a spurious one.
+# Neither context wins outright -- but this tool has to match what the user
+# actually hears, or correcting its phonemes answers the wrong question.
+CLAUSE_SPLIT = re.compile(r"(?<=[،؛:])\s+")
+
 
 LEGEND = """\
 # Edit the phonemes below, then run:  ezafe_ab.py speak --voice <prompt.wav>
@@ -61,12 +72,15 @@ def _phonemise(persian: str) -> str:
 
     tok = AutoTokenizer.from_pretrained(G2P_ID)
     g2p = T5ForConditionalGeneration.from_pretrained(G2P_ID).eval()
-    text = normalize_for_model(persian).replace("؟", "").replace("?", "")
-    enc = tok([text], add_special_tokens=False, return_tensors="pt")
-    with torch.no_grad():
-        out = g2p.generate(**enc, num_beams=5, max_length=512, early_stopping=True)
-    raw = tok.batch_decode(out, skip_special_tokens=True)[0].strip()
-    return raw.translate(TO_PHONEMES)
+    def one(clause: str) -> str:
+        text = normalize_for_model(clause).replace("؟", "").replace("?", "")
+        enc = tok([text], add_special_tokens=False, return_tensors="pt")
+        with torch.no_grad():
+            out = g2p.generate(**enc, num_beams=5, max_length=512, early_stopping=True)
+        return tok.batch_decode(out, skip_special_tokens=True)[0].strip().translate(TO_PHONEMES)
+
+    parts = [one(c) for c in CLAUSE_SPLIT.split(persian) if c.strip()]
+    return " ".join(parts)
 
 
 def _read_phonemes(path: Path) -> str:

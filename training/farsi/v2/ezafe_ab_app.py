@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -37,6 +38,16 @@ from transformers import AutoTokenizer, T5ForConditionalGeneration  # noqa: E402
 MODEL_CFG = os.environ.get("MODEL_CFG", "hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml")
 G2P_ID = "mehdi-hf/Homo-GE2PE-Persian-HF"
 TO_PHONEMES = str.maketrans({"/": "a", "a": "A", "@": "?", "$": "S", "c": "C"})
+
+# The Space splits on clause punctuation BEFORE phonemising, because G2P discards
+# it. That changes what G2P sees, and its ezafe decisions are context-dependent:
+# on one test sentence the whole-sentence pass produced "CandbarAbariye qeymate"
+# (correct) where per-clause dropped the ezafe, while per-clause produced
+# "tarke tahsile dAneSAmuzAn" (correct) where whole-sentence added a spurious one.
+# Neither context wins outright -- but this tool has to match what the user
+# actually hears, or correcting its phonemes answers the wrong question.
+CLAUSE_SPLIT = re.compile(r"(?<=[،؛:])\s+")
+
 DEFAULT_VOICE = str(REPO / "training/farsi/v2/cv_eval/audio/common_voice_fa_19227531.wav")
 DEFAULT_TEXT = "در آستانه آغاز سال تحصیلی جدید، فشار اقتصادی بر خانواده‌ها تشدید شده است"
 
@@ -55,11 +66,14 @@ def phonemise(persian: str) -> tuple[str, str, str]:
     """Persian -> phonemes. Returns it three times: shown, editable, and kept for the diff."""
     if not persian or not persian.strip():
         raise gr.Error("Enter some Persian text first.")
-    text = normalize_for_model(persian).replace("؟", "").replace("?", "")
-    enc = _g2p_tok([text], add_special_tokens=False, return_tensors="pt")
-    with torch.no_grad():
-        out = _g2p.generate(**enc, num_beams=5, max_length=512, early_stopping=True)
-    p = _g2p_tok.batch_decode(out, skip_special_tokens=True)[0].strip().translate(TO_PHONEMES)
+    def one(clause: str) -> str:
+        text = normalize_for_model(clause).replace("؟", "").replace("?", "")
+        enc = _g2p_tok([text], add_special_tokens=False, return_tensors="pt")
+        with torch.no_grad():
+            out = _g2p.generate(**enc, num_beams=5, max_length=512, early_stopping=True)
+        return _g2p_tok.batch_decode(out, skip_special_tokens=True)[0].strip().translate(TO_PHONEMES)
+
+    p = " ".join(one(c) for c in CLAUSE_SPLIT.split(persian) if c.strip())
     return p, p, p
 
 
