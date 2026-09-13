@@ -2,6 +2,9 @@
   
 > **This is a fork of [mallahyari/pocket-tts](https://github.com/mallahyari/pocket-tts).**
 > It adds a streaming Gradio web UI for the Persian (Farsi) model.
+> Streaming playback — audio starts within ~1 second, regardless of text length.
+> Can read long text ...
+
 > See `/webui/farsi_webui.py` for the implementation.
 ## Components
 
