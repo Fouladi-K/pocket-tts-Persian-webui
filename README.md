@@ -53,24 +53,33 @@ pip install "pocket-tts @ git+https://github.com/mallahyari/pocket-tts@main"
 
 ### Speaking more than one sentence
 
-Split the Persian into sentences, phonemise each on its own, synthesise each,
-and join with a pause of about 0.25 s. G2P discards punctuation, so a
-phonemised paragraph has no sentence boundaries left in it and any chunker is
-then cutting on token count alone, landing mid-sentence.
+**Keep the voice prompt at or under 5 seconds.** This is the one that bites
+hardest. Training capped voice prompts at 5 s, so a longer one is out of
+distribution and the model continues the prompt's own speech instead of
+speaking your text — you get a fluent sentence, in the right voice, that has
+nothing to do with what you asked for. Same recording, four draws each: 0/4
+with the first word spoken at 6.1 s, 4/4 at 5 s. Nothing else on this page
+matters as much.
+
+**Split on sentence *and* clause punctuation before phonemising.** G2P discards
+punctuation, so once text is phonemised there are no boundaries left and any
+chunker cuts on token count alone, landing mid-phrase. Splitting first is what
+preserves them:
 
 ```python
 import re
-sentences = [s.strip() for s in re.split(r"(?<=[.!؟])\s+", article) if s.strip()]
-pieces = [synthesise(phonemise(s)) for s in sentences]
+for sentence in re.split(r"(?<=[.!؟])\s+", article):
+    for clause in re.split(r"(?<=[،؛:])\s+", sentence):
+        speak(phonemise(clause))          # pause between clauses, longer between sentences
 ```
 
 Do this for **prosody, not accuracy**. Measured on a five-sentence paragraph
-over three seeds each, the two routes are indistinguishable on word error rate
-— 0.736 median (0.660–0.792) phonemising the paragraph whole against 0.792
-(0.717–0.811) per sentence, a spread wider than the gap. What it buys is that
-pauses land at sentence ends rather than wherever the token budget ran out.
+over three seeds each, phonemising it whole against per sentence is
+indistinguishable on word error rate — 0.736 median (0.660–0.792) against 0.792
+(0.717–0.811), a spread wider than the gap. What it buys is that pauses land
+where the author put them.
 
-Two things matter more than how you chunk:
+Two more things:
 
 - **Retry a runaway rather than shipping it.** A generation that never emits
   end-of-speech runs to the length cap and repeats itself — `fanAvari` comes
@@ -78,9 +87,25 @@ Two things matter more than how you chunk:
   terminates. Compare the output against `tokens / 3.0 + 2.0` seconds and
   regenerate when it exceeds that.
 - **Chunk length is the constraint, not document length.** Training utterances
-  averaged ~11 tokens. Nine to sixteen is the clean band, 18 is a safe budget,
-  and at 21 and above generations stop terminating. Long documents are fine;
-  unbroken text with no sentence structure is not.
+  averaged ~11 tokens and 18 is a safe budget; at 21 and above generations stop
+  terminating. At the short end, 7 tokens renders cleanly and 3 does not — a
+  chunk that short makes the model continue the voice prompt. Long documents
+  are fine; unbroken text with no sentence structure is not.
+
+### Is a missing ezafe the G2P's fault or the model's?
+
+v2 does not read Persian. A separate G2P decides where every ezafe goes and the
+model renders what it is handed, so a missing ezafe has two possible causes that
+call for opposite work. Two tools settle it by letting you correct the phonemes
+by hand and hear both versions, generated from the same seed and prompt:
+
+```bash
+python training/farsi/v2/ezafe_ab_app.py          # Gradio UI
+python training/farsi/v2/ezafe_ab.py prepare --text "..."   # or the CLI
+```
+
+Corrected sounds right, the frontend is the bottleneck. Corrected still drops
+it, the model is, and G2P work will not help.
 
 ## Farsi v1 examples
 
