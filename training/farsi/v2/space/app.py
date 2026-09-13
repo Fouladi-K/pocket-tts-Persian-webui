@@ -18,6 +18,7 @@ from pathlib import Path
 import gradio as gr
 import numpy as np
 import scipy.io.wavfile
+import sphn
 import torch
 from pocket_tts import TTSModel
 from transformers import AutoTokenizer, T5ForConditionalGeneration
@@ -273,7 +274,14 @@ def _trim_silence(a: np.ndarray, keep_ms: float = 120.0) -> np.ndarray:
 
 def _prepare_voice_prompt(voice_audio, voice_sec: float) -> str:
     if voice_audio is None:
-        return EXAMPLE_VOICE
+        # The example voice needs the same cap as an uploaded one. Returning the
+        # path unchanged skipped it, and the 6.1 s clip originally shipped here
+        # went to the model whole. Training capped voice prompts at 5 s, so a
+        # longer one is out of distribution: the same recording scored 0/4 on a
+        # first-word test untrimmed and 3/4 trimmed to 5 s -- untrimmed it made
+        # the model speak the prompt's own sentence instead of the requested text.
+        wav, sr = sphn.read(EXAMPLE_VOICE)
+        return _write_prompt(wav.mean(axis=0), int(sr), voice_sec)
     sr, data = voice_audio
     data = np.asarray(data)
     if data.ndim > 1:
@@ -285,13 +293,18 @@ def _prepare_voice_prompt(voice_audio, voice_sec: float) -> str:
         data = data.astype(np.float32)
     if data.size == 0:
         raise gr.Error("The voice prompt is empty — upload or record 2–5 seconds of speech.")
+    return _write_prompt(data, int(sr), voice_sec)
+
+
+def _write_prompt(data: np.ndarray, sr: int, voice_sec: float) -> str:
+    """Cap the prompt at voice_sec and write it where the model can read it."""
     if voice_sec > 0:
         data = data[: int(voice_sec * sr)]
     peak = float(np.max(np.abs(data)))
     if peak > 1.0:
         data = data / peak
     path = Path(tempfile.mkdtemp()) / "voice_prompt.wav"
-    scipy.io.wavfile.write(str(path), int(sr), (data * 32767.0).astype(np.int16))
+    scipy.io.wavfile.write(str(path), sr, (data * 32767.0).astype(np.int16))
     return str(path)
 
 

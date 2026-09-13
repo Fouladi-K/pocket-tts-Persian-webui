@@ -15,10 +15,10 @@ api.create_repo(repo_id=repo, repo_type="space", space_sdk="gradio")
 api.upload_folder(folder_path=".", repo_id=repo, repo_type="space")
 ```
 
-The example voice is not interchangeable: `common_voice_fa_19227531.wav`
-scored 4/4 on a first-word test where `common_voice_fa_19222553.wav`, which
-this app originally shipped, scored 0/4 and returned the prompt's own sentence
-every time. Verify any replacement before using it.
+Any example voice works now that the app caps it, but prefer a clip already
+under 5 seconds. Training capped voice prompts at 5 s, and the app used to hand
+its default through untrimmed: a 6.1 s clip scored 0/4 on a first-word test
+whole and 4/4 cut to 5 s.
 
 `normalize_fa.py` and `example_voice.wav` are not kept here — they live in
 `training/farsi/` and `training/farsi/v2/cv_eval/audio/` respectively. Copy both
