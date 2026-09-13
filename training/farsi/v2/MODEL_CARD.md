@@ -232,10 +232,25 @@ and `--pause-at-punct` has nothing to act on. Phrasing is entirely the model's
 own. Keeping the ezafe marks (above) is what stops a chunk boundary landing
 inside a noun phrase, which is the one lever you do have.
 
-**Voice prompt choice matters a lot.** Some prompts produce stable output while
-others cause the model to continue the prompt's own speech instead of the
-requested text. Prompts that end at a natural phrase boundary, around 5 seconds,
-work best; `--voice-sec 5` is the default cap for that reason.
+**Voice prompt choice matters more than anything else you control.** Some
+prompts work every time and some make the model speak the prompt's own words
+instead of your text. This is not a small effect. Measured on `man be bAzAr
+raftam`, four draws each, scoring whether the first word is spoken at all:
+
+| prompt | correct |
+|---|---|
+| a good 4.3 s clip | 4 / 4 |
+| the clip this repo first shipped as the example | **0 / 4** |
+
+Zero out of four. Every draw returned the prompt's sentence rather than the
+requested one. Three other clips from the same corpus scored 4/4, so this is a
+property of the individual recording, not of the model or of your text.
+
+We could not find what distinguishes them. The bad clip is not clipped by the
+5-second cap, ends cleanly 1.3 s after its last word, and is neither quiet nor
+noisy. If output comes back as someone else's sentence, **try a different
+prompt before anything else** -- it is the fastest fix and usually the right
+one. `samples/prompt_hello.wav` here is a known-good one.
 
 **Absolute WER is high on this benchmark.** Whisper's own error floor on the
 real Common Voice recordings is 0.273, so a meaningful part of the measured

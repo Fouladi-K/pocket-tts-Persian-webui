@@ -15,13 +15,18 @@ api.create_repo(repo_id=repo, repo_type="space", space_sdk="gradio")
 api.upload_folder(folder_path=".", repo_id=repo, repo_type="space")
 ```
 
+The example voice is not interchangeable: `common_voice_fa_19227531.wav`
+scored 4/4 on a first-word test where `common_voice_fa_19222553.wav`, which
+this app originally shipped, scored 0/4 and returned the prompt's own sentence
+every time. Verify any replacement before using it.
+
 `normalize_fa.py` and `example_voice.wav` are not kept here — they live in
 `training/farsi/` and `training/farsi/v2/cv_eval/audio/` respectively. Copy both
 into the upload folder first:
 
 ```bash
 cp ../../normalize_fa.py .
-cp ../cv_eval/audio/common_voice_fa_19222553.wav example_voice.wav
+cp ../cv_eval/audio/common_voice_fa_19227531.wav example_voice.wav
 ```
 
 ## Why requirements.txt installs pocket-tts from git
