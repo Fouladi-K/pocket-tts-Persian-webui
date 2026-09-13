@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import random
 import re
 import sys
 import tempfile
@@ -150,7 +151,9 @@ with gr.Blocks(title="Ezafe A/B") as demo:
         "`A` long ā · `a` short a · `?` glottal stop · `S` š · `C` č · `;` ž · `x` خ · `q` ق/غ. "
         "The ezafe is a trailing `e`/`ye` on the **first** word of the pair. A trailing `1` "
         "only tells the chunker not to split the pair; it is stripped before generation, so "
-        "it changes phrasing, not sound."
+        "it changes phrasing, not sound.\n\n"
+        "Both sides share one seed, so **Speak both** is deterministic — press it twice "
+        "and you get the same audio. Use **New take** to hear a different draw."
     )
     original = gr.State("")
     with gr.Row():
@@ -165,8 +168,13 @@ with gr.Blocks(title="Ezafe A/B") as demo:
     with gr.Accordion("Settings", open=False):
         max_tokens = gr.Slider(8, 24, value=18, step=1, label="Max tokens per chunk")
         temperature = gr.Slider(0.05, 1.0, value=0.3, step=0.05, label="Temperature")
-        seed = gr.Slider(0, 50, value=0, step=1, label="Seed (same for both sides)")
-    go = gr.Button("Speak both", variant="primary")
+        seed = gr.Slider(0, 999999, value=0, step=1,
+                         label="Seed — the same for both sides, so only the text differs")
+    with gr.Row():
+        go = gr.Button("Speak both", variant="primary")
+        # Both sides share a seed on purpose, so pressing Speak twice returns
+        # byte-identical audio. This is the way to hear a different draw.
+        again = gr.Button("🎲 New take (different seed)")
     with gr.Row():
         out_a = gr.Audio(label="A — G2P as-is", type="numpy")
         out_b = gr.Audio(label="B — corrected", type="numpy")
@@ -175,6 +183,9 @@ with gr.Blocks(title="Ezafe A/B") as demo:
     go_ph.click(phonemise, inputs=[persian], outputs=[shown, edited, original])
     go.click(compare, inputs=[original, edited, voice, max_tokens, temperature, seed],
              outputs=[out_a, out_b, report])
+    again.click(lambda: random.randint(1, 999999), outputs=seed).then(
+        compare, inputs=[original, edited, voice, max_tokens, temperature, seed],
+        outputs=[out_a, out_b, report])
 
 if __name__ == "__main__":
     demo.queue().launch()
