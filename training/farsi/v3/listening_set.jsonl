@@ -1,0 +1,34 @@
+{"id":"ez01","cat":"ezafe","text":"کتاب من روی میز اتاق است","listen":"ketâb-E man, miz-E otâq — two links"}
+{"id":"ez02","cat":"ezafe","text":"خانه بزرگ پدرم در شمال شهر است","listen":"khâne-YE bozorg-E pedaram — a chain of two on one noun"}
+{"id":"ez03","cat":"ezafe","text":"وزیر امور خارجه ایران سخنرانی کرد","listen":"vazir-E omur-E khâreje-YE irân — a chain of three"}
+{"id":"ez04","cat":"ezafe","text":"رنگ آبی آسمان صبح بسیار زیباست","listen":"rang-E âbi-YE âsemân-E sobh — four-deep chain"}
+{"id":"ez05","cat":"ezafe","text":"مدیر عامل شرکت ملی نفت استعفا داد","listen":"modir-E âmel-E sherkat-E melli-YE naft"}
+{"id":"ez06","cat":"ezafe","text":"صدای موسیقی سنتی ایرانی آرامش‌بخش است","listen":"sedâ-YE musiqi-YE sonnati-YE irâni"}
+{"id":"ez07","cat":"ezafe-absent","text":"من دیروز کتاب خریدم","listen":"NO ezafe anywhere — a spurious one here is the failure"}
+{"id":"ez08","cat":"ezafe-absent","text":"او آمد و نشست و چیزی نگفت","listen":"NO ezafe — verbs only"}
+{"id":"st01","cat":"stop-initial","text":"پدرم هر روز صبح ورزش می‌کند","listen":"the opening /p/ of pedaram"}
+{"id":"st02","cat":"stop-initial","text":"بابک دیروز به تهران رفت","listen":"the opening /b/ of bâbak"}
+{"id":"st03","cat":"stop-initial","text":"تهران پایتخت ایران است","listen":"the opening /t/ of tehrân"}
+{"id":"st04","cat":"stop-initial","text":"دکتر بیمار را معاینه کرد","listen":"the opening /d/ of doktor"}
+{"id":"st05","cat":"stop-initial","text":"کتاب را روی میز گذاشتم","listen":"the opening /k/ of ketâb"}
+{"id":"st06","cat":"stop-initial","text":"گربه روی دیوار نشسته بود","listen":"the opening /g/ of gorbe"}
+{"id":"st07","cat":"stop-initial","text":"مادرم غذای خوشمزه‌ای پخت","listen":"the opening /m/ of mâdaram"}
+{"id":"st08","cat":"stop-initial","text":"نان تازه بوی خوبی دارد","listen":"the opening /n/ of nân"}
+{"id":"gl01","cat":"glottal-control","text":"امروز هوا آفتابی است","listen":"CONTROL — glottal onset, should never fail"}
+{"id":"gl02","cat":"glottal-control","text":"این کتاب بسیار جالب است","listen":"CONTROL — glottal onset, should never fail"}
+{"id":"pa01","cat":"pause","text":"اگر باران بیاید، ما بیرون نمی‌رویم","listen":"a real pause at the comma, not a run-on"}
+{"id":"pa02","cat":"pause","text":"بعد از ظهر، هوا سردتر می‌شود","listen":"comma after a short opening phrase"}
+{"id":"pa03","cat":"pause","text":"با وجود همه مشکلات، پروژه به موقع تمام شد","listen":"comma, and the ezafe chain before it"}
+{"id":"pa04","cat":"pause","text":"او گفت که فردا می‌آید، اما من مطمئن نیستم","listen":"comma mid-sentence before a contrast"}
+{"id":"nu01","cat":"number","text":"قیمت این کتاب بیست و پنج هزار تومان است","listen":"numbers already spelled out"}
+{"id":"nu02","cat":"number","text":"قیمت این کتاب ۲۵۰۰۰ تومان است","listen":"digits — must be read as words, not dropped"}
+{"id":"nu03","cat":"number","text":"جلسه ساعت ۹ و نیم صبح شروع می‌شود","listen":"a digit inside a phrase"}
+{"id":"nu04","cat":"number","text":"در سال ۱۴۰۲ اتفاقات زیادی افتاد","listen":"a year — four digits"}
+{"id":"fn01","cat":"foreign","text":"کریس رایت وزیر انرژی آمریکا است","listen":"kris rÂyt — foreign name at position zero"}
+{"id":"fn02","cat":"foreign","text":"شرکت آنتروپیک مدل جدیدی منتشر کرد","listen":"ânteropik — foreign name after a native word"}
+{"id":"fn03","cat":"foreign","text":"واشینگتن و مسکو با یکدیگر مذاکره کردند","listen":"two foreign place names"}
+{"id":"lo01","cat":"long","text":"هوش مصنوعی در سال‌های اخیر به سرعت پیشرفت کرده است. پژوهشگران می‌گویند این فناوری می‌تواند بسیاری از مشاغل را دگرگون کند.","listen":"two sentences — the join, and the second opening"}
+{"id":"lo02","cat":"long","text":"در آستانه آغاز سال تحصیلی جدید، افزایش قیمت لوازم‌التحریر فشار اقتصادی بر خانواده‌ها را تشدید کرده است.","listen":"long, one comma, several ezafe chains"}
+{"id":"lo03","cat":"long","text":"برای امتحان کردن آن، زبان و ابزار ورودی خود را از قسمت پایین انتخاب کنید و شروع کنید به تایپ کردن.","listen":"short opening clause then a long one"}
+{"id":"qu01","cat":"question","text":"شما معمولا چه ساعتی از خواب بیدار می‌شوید؟","listen":"question intonation at the end"}
+{"id":"qu02","cat":"question","text":"چه روز خوبی بود!","listen":"exclamation — short, and stop-initial"}
