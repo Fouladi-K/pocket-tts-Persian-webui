@@ -206,7 +206,9 @@ with the models hidden and reshuffled per item, on four axes scored separately.
 | phrasing | **24** | 9 | 1 |
 | naturalness | **26** | 5 | 3 |
 
-v1 won 5 of 136.
+v1 won 5 of 136. The sentence set and the harness are in the repo
+([`training/farsi/v3/`](https://github.com/mallahyari/pocket-tts/tree/main/training/farsi/v3)),
+so you can run it against your own model or disagree with the scoring.
 
 ---
 
