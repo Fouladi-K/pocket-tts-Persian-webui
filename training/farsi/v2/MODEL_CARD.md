@@ -187,11 +187,26 @@ That matters here, because v2 moved the ezafe decision out of the model. v1
 reads Persian script and learned where the ezafe belongs from audio. v2 is told
 by a separate G2P stage and renders whatever it is given.
 
-At least one native listener prefers
-[v1](https://huggingface.co/mehdi-hf/pocket-tts-farsi) for naturalness and
-ezafe on running text, on material where v2 wins every number in the table.
-Read these figures as what they are -- stability, transcription accuracy and
-voice similarity -- and judge prosody by ear.
+So the table above cannot settle prosody. A blind listening test can, and does.
+
+### Judged by ear, blind
+
+34 Persian sentences chosen to provoke specific failures -- ezafe chains up to
+four links deep, one sentence per stop consonant to stress first words, commas,
+digits, foreign proper nouns, plus controls whose correct output contains *no*
+ezafe. Both models generate every sentence; a native listener scores A/B pairs
+with the models hidden and reshuffled per item, on four axes scored separately.
+
+136 judgements:
+
+| | v2 wins | tie | v1 wins |
+|---|---|---|---|
+| ezafe | **21** | 12 | 1 |
+| first word | **22** | 12 | 0 |
+| phrasing | **24** | 9 | 1 |
+| naturalness | **26** | 5 | 3 |
+
+v1 won 5 of 136.
 
 ---
 
