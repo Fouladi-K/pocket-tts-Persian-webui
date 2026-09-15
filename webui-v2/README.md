@@ -102,12 +102,12 @@ python farsi_webui.py
 
 **First run** downloads two models from Hugging Face:
 
-- `mehdi-hf/pocket-tts-farsi-v2` (~1–2 GB)
-- `mehdi-hf/Homo-GE2PE-Persian-HF` (~500 MB)
+- `mehdi-hf/pocket-tts-farsi-v2` 
+- `mehdi-hf/Homo-GE2PE-Persian-HF` 
 
 Subsequent runs start instantly from cache.
 
-Open your browser at `http://localhost:7861`.
+Open your browser at `http://localhost:7862`.
 
 > Port is `7861` so this script can run alongside the v1 web UI on
 > port `7860` for side-by-side comparison.
