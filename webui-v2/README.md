@@ -45,8 +45,6 @@ from v1 to keep long sentences stable.
 ---
 ## Sample Output
 
-Generated from [`sample_input.txt`](sample_input.txt) using the default voice:
-
 <audio controls>
   <source src="https://raw.githubusercontent.com/Fouladi-K/pocket-tts-Persian-webui/main/webui-v2/sample_output.wav" type="audio/wav">
   Your browser does not support the audio element.
