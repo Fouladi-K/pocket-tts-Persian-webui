@@ -1,0 +1,6 @@
+pocket-tts @ git+https://github.com/mallahyari/pocket-tts@main
+gradio
+scipy
+numpy
+transformers
+torch
