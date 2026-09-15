@@ -5,12 +5,10 @@
 > Streaming playback — audio starts within ~1 second, regardless of text length.
 > Can read long text ...
 
-> See `/webui/farsi_webui.py` for the implementation.
 ## Components
 
-- **[`webui/`](webui/README.md)** — Streaming Gradio web interface for the
-  Persian (Farsi) model
----
+- **[`webui/`](webui/README.md)** — Streaming web UI for the v1 (script-based) Farsi model
+- **[`webui-v2/`](webui-v2/README.md)** — Streaming web UI for the v2 (phoneme-based, chunked) Farsi model
 
 # Pocket TTS
 
