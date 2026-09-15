@@ -45,12 +45,7 @@ from v1 to keep long sentences stable.
 ---
 ## Sample Output
 
-<audio controls>
-  <source src="https://raw.githubusercontent.com/Fouladi-K/pocket-tts-Persian-webui/main/webui-v2/sample_output.wav" type="audio/wav">
-  Your browser does not support the audio element.
-</audio>
-
-[▶️ Listen to a sample output](https://gabalpha.github.io/read-audio/?p=https://raw.githubusercontent.com/Fouladi-K/pocket-tts-Persian-webui/main/webui-v2/sample_output.wav)
+[Listen to a sample output](https://raw.githubusercontent.com/Fouladi-K/pocket-tts-Persian-webui/main/webui-v2/sample_output.wav)
 
 ---
 
