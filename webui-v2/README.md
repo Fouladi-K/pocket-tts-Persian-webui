@@ -109,8 +109,6 @@ Subsequent runs start instantly from cache.
 
 Open your browser at `http://localhost:7862`.
 
-> Port is `7861` so this script can run alongside the v1 web UI on
-> port `7860` for side-by-side comparison.
 
 ---
 
