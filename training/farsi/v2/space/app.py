@@ -36,7 +36,7 @@ DEFAULT_TEMPERATURE = 0.3
 DEFAULT_EOS_THRESHOLD = -2.0
 FRAMES_AFTER_EOS = 0
 DEFAULT_MAX_TOKENS = 18     # ~11 tokens was the training average; 21+ runs past EOS
-DEFAULT_MIN_TOKENS = 8
+DEFAULT_MIN_TOKENS = 5
 DEFAULT_VOICE_SEC = 5.0     # training capped voice prompts at 5 s
 # These are real now. Before chunks were trimmed they each carried 0.5-1.3 s of
 # their own silence, so a join of 0 still left about a second of gap; trimmed, a
@@ -228,8 +228,14 @@ def plan_sentence(sent: str, max_tokens: int, min_tokens: int = DEFAULT_MIN_TOKE
             cur = trial
             if not ends_clause or i == len(words) - 1:
                 continue
+            # A comma is the author saying where the pause goes, so honour it.
+            # The only reason to refuse is a chunk so short the model cannot
+            # render it -- observed at 3 tokens, where it continued the voice
+            # prompt instead. 7 tokens is fine. There used to be a `>= target`
+            # gate here as well, which made a leading clause almost never break
+            # and silently threw the punctuation away.
             rest = _count_tokens(" ".join(w for w, _ in words[i + 1:]))
-            if _count_tokens(cur) >= min_tokens and rest >= min_tokens and _count_tokens(cur) >= target:
+            if _count_tokens(cur) >= min_tokens and rest >= min_tokens:
                 out.append((cur, "clause"))
                 cur = ""
         if cur:

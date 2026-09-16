@@ -152,6 +152,64 @@ utterances averaged about 11 tokens. Nine to sixteen is the clean band, 18 is a
 safe budget, and at 21 and above generations stop terminating. Long documents
 are fine; unbroken text with no sentence structure is not.
 
+## Results
+
+Measured on 300 held-out Common Voice pairs — speakers and clips the model has
+never seen, no overlap with training. Compared against
+[v1](https://huggingface.co/mehdi-hf/pocket-tts-farsi) evaluated identically.
+
+| | v1 | **v2** |
+|---|---|---|
+| mean WER | 2.048 | **0.582** |
+| median per-item WER | 0.333 | 0.333 |
+| runaway generations | 25 / 300 | **0–1 / 300** |
+| speaker similarity | 0.764 | **0.859** |
+| UTMOS (naturalness) | 2.826 | **3.11** |
+
+**A typical utterance is about as accurate as v1's** — the medians are level.
+What changed is that the catastrophic failures largely stop: v1 ran past the end
+of the text on 25 of 300 items, repeating itself or drifting into the voice
+prompt's words. v2 does that on zero to one. That, plus noticeably better voice
+cloning, is the difference you hear.
+
+Figures are the mean of three evaluation runs. Single runs of this metric vary
+by up to 0.3 WER, because one runaway generation carries an enormous insertion
+count.
+
+### What these numbers cannot see
+
+Every metric above is blind to the **ezafe**. Persian does not write it, so a
+transcription never contains it and word error rate cannot score it. Speaker
+similarity measures voice identity; UTMOS measures general audio naturalness,
+not Persian grammar or phrasing.
+
+That matters here, because v2 moved the ezafe decision out of the model. v1
+reads Persian script and learned where the ezafe belongs from audio. v2 is told
+by a separate G2P stage and renders whatever it is given.
+
+So the table above cannot settle prosody. A blind listening test can, and does.
+
+### Judged by ear, blind
+
+34 Persian sentences chosen to provoke specific failures -- ezafe chains up to
+four links deep, one sentence per stop consonant to stress first words, commas,
+digits, foreign proper nouns, plus controls whose correct output contains *no*
+ezafe. Both models generate every sentence; a native listener scores A/B pairs
+with the models hidden and reshuffled per item, on four axes scored separately.
+
+136 judgements:
+
+| | v2 wins | tie | v1 wins |
+|---|---|---|---|
+| ezafe | **21** | 12 | 1 |
+| first word | **22** | 12 | 0 |
+| phrasing | **24** | 9 | 1 |
+| naturalness | **26** | 5 | 3 |
+
+v1 won 5 of 136. The sentence set and the harness are in the repo
+([`training/farsi/v3/`](https://github.com/mallahyari/pocket-tts/tree/main/training/farsi/v3)),
+so you can run it against your own model or disagree with the scoring.
+
 ---
 
 ## Samples
