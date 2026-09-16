@@ -44,7 +44,7 @@ YIELD_INTERVAL_SEC = 0.5
 # Tier 3: conjunctions (applied when tiers 1+2 fail)
 # Tier 4: verbs (last resort)
 
-MAX_CHARS_PER_CHUNK = 150
+MAX_CHARS_PER_CHUNK = 50
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
 
