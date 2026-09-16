@@ -1,4 +1,8 @@
-# Pocket TTS - Farsi Streaming Web UI
+# Pocket TTS - Farsi Streaming Web UI(Old Version)
+see new version here:
+[webui-v2](https://github.com/Fouladi-K/pocket-tts-Persian-webui/tree/main/webui-v2)
+
+---
 
 A Gradio-based web interface for the Persian (Farsi) Pocket TTS model.
 Paste Persian text, press **Generate**, and hear the audio stream back in
