@@ -123,15 +123,15 @@ Constants at the top of `farsi_webui.py`:
 
 | Constant | Default | Effect |
 | :--- | :--- | :--- |
-| `MAX_CHARS_PER_CHUNK` | `150` | Sentences longer than this trigger tiers 2 and 3. Lower = smaller chunks, more stable. |
+| `MAX_CHARS_PER_CHUNK` | `50` | Sentences longer than this trigger tiers 2 and 3. Lower = smaller chunks, more stable. |
 | `MIN_CONJ_SPLITS` | `1` | Minimum conjunctions required before tier 2 fires. |
 | `MIN_VERB_SPLITS` | `1` | Minimum verbs required before tier 3 fires. |
 | `YIELD_INTERVAL_SEC` | `0.5` | How often audio is pushed to the browser. |
 
 **Recommended tuning:**
 
-- **Runaway generation / garbled audio** → lower `MAX_CHARS_PER_CHUNK` to `120`
-- **Choppy playback with many small pauses** → raise `MAX_CHARS_PER_CHUNK` to `200`–`250`
+- **Runaway generation / garbled audio** → lower `MAX_CHARS_PER_CHUNK` to `50`
+- **Choppy playback with many small pauses** → raise `MAX_CHARS_PER_CHUNK` to `150`
 - **Prosodic "reset" at chunk boundaries is too audible** → reduce
   inter-chunk silence from `0.25` to `0.10` seconds
 
