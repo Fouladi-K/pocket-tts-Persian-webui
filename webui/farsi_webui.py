@@ -5,9 +5,10 @@ import re
 import statistics
 import pocket_tts.default_parameters as dp
 
-# ------------------------------------------------------------------
-# Workaround for upstream bug: statistics.mean(steps_times) with empty list
-# ------------------------------------------------------------------
+
+# ============================================================
+#  Workaround: statistics.mean([]) raises in tts_model.py
+# ============================================================
 _orig_mean = statistics.mean
 def _safe_mean(data, *args, **kwargs):
     if not data:
@@ -15,6 +16,10 @@ def _safe_mean(data, *args, **kwargs):
     return _orig_mean(data, *args, **kwargs)
 statistics.mean = _safe_mean
 
+
+# ============================================================
+#  Load TTS model — v1
+# ============================================================
 dp.MAX_TOKEN_PER_CHUNK = 30
 
 model = TTSModel.load_model(
@@ -25,14 +30,16 @@ voice_state = model.get_state_for_audio_prompt("example_voice.wav")
 
 YIELD_INTERVAL_SEC = 0.5
 
-# ---- Recommended defaults (also exposed in the UI) ----
-DEFAULT_MAX_CHARS       = 100
-DEFAULT_MIN_CHARS       = 30      # <-- recommended: merges tiny fragments
-DEFAULT_SPLIT_COMMA     = True
-DEFAULT_DROP_LETTERLESS = False
-DEFAULT_RESCUE          = True
-DEFAULT_FAE             = 2
-DEFAULT_EOS_THRESHOLD   = -4.0
+
+# ============================================================
+#  Defaults (also exposed in the UI)
+# ============================================================
+DEFAULT_MAX_CHARS     = 100
+DEFAULT_MIN_CHARS     = 30
+DEFAULT_SPLIT_COMMA   = True
+DEFAULT_RESCUE        = True
+DEFAULT_FAE           = 2
+DEFAULT_EOS_THRESHOLD = -4.0
 
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
@@ -42,12 +49,18 @@ MIN_VERB_SPLITS = 1
 #  Conjunctions
 # ============================================================
 _CONJUNCTIONS = [
-    "به شرط آنکه", "به‌شرط آنکه", "از آنجا که", "ازآنجا که",
-    "از این رو", "ازاین‌رو", "با این حال", "بااین‌حال",
-    "با اینکه", "بااینکه", "همین که", "همینکه",
-    "زیرا که", "زیراکه", "چون که", "چونکه",
-    "اگر چه", "اگرچه", "چنان که", "چنانکه",
-    "چنان چه", "چنانچه", "بدان که", "بدانکه",
+    "به شرط آنکه", "به‌شرط آنکه",
+    "از آنجا که", "ازآنجا که",
+    "از این رو", "ازاین‌رو",
+    "با این حال", "بااین‌حال",
+    "با اینکه", "بااینکه",
+    "همین که", "همینکه",
+    "زیرا که", "زیراکه",
+    "چون که", "چونکه",
+    "اگر چه", "اگرچه",
+    "چنان که", "چنانکه",
+    "چنان چه", "چنانچه",
+    "بدان که", "بدانکه",
     "و", "یا", "پس", "اگر", "نه", "چون", "اما",
     "خواه", "زیرا", "لیکن", "ولی", "بلکه",
 ]
@@ -55,11 +68,13 @@ _CONJ_SORTED = sorted(_CONJUNCTIONS, key=lambda s: len(s.split()), reverse=True)
 
 
 # ============================================================
-#  Verbs
+#  Verbs (SOV clause-end markers)
 # ============================================================
 _VERB_PHRASES = [
-    "شده است", "شده بود", "شده‌اند", "شده بودند", "نشده است", "نشده بود",
-    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند", "نکرده است", "نکرده بود",
+    "شده است", "شده بود", "شده‌اند", "شده بودند",
+    "نشده است", "نشده بود",
+    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند",
+    "نکرده است", "نکرده بود",
     "رفته است", "رفته بود", "رفته‌اند", "رفته بودند",
     "آمده است", "آمده بود", "آمده‌اند",
     "داده است", "داده بود", "داده‌اند",
@@ -101,32 +116,133 @@ _VERB_WORDS = {
     "می‌خواهد","نمی‌خواهد","می‌خواهند","بخواهد","بخواهند",
     "توانست","نتوانست","توانسته","نتوانسته",
     "می‌تواند","نمی‌تواند","می‌توانند","نمی‌توانند","بتواند","بتوانند",
-    "رسید","نرسید","رسیده","می‌رسد","برسد","افتاد","افتاده","می‌افتد","بیفتد",
-    "نشست","نشسته","می‌نشیند","بنشیند","ایستاد","ایستاده","می‌ایستد","بایستد",
-    "برگشت","برگشته","برمی‌گردد","برگردد","مرد","مرده","می‌میرد","بمیرد",
-    "خرید","خریده","می‌خرد","بخرد","فروخت","فروخته","می‌فروشد","بفروشد",
-    "نوشت","نوشته","می‌نویسد","بنویسد","خواند","خوانده","می‌خواند","بخواند",
-    "شنید","شنیده","می‌شنود","بشنود","دانست","دانسته","می‌داند","بداند",
+    "رسید","نرسید","رسیده","می‌رسد","برسد",
+    "افتاد","افتاده","می‌افتد","بیفتد",
+    "نشست","نشسته","می‌نشیند","بنشیند",
+    "ایستاد","ایستاده","می‌ایستد","بایستد",
+    "برگشت","برگشته","برمی‌گردد","برگردد",
+    "مرد","مرده","می‌میرد","بمیرد",
+    "خرید","خریده","می‌خرد","بخرد",
+    "فروخت","فروخته","می‌فروشد","بفروشد",
+    "نوشت","نوشته","می‌نویسد","بنویسد",
+    "خواند","خوانده","می‌خواند","بخواند",
+    "شنید","شنیده","می‌شنود","بشنود",
+    "دانست","دانسته","می‌داند","بداند",
     "فهمید","فهمیده","می‌فهمد","بفهمد",
 }
 _VERB_PHRASES_SORTED = sorted(_VERB_PHRASES, key=lambda s: len(s.split()), reverse=True)
-_NO_SPLIT_BEFORE = {"را","به","از","با","در","بر","برای","بدون",
-                    "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان"}
 
-# Weak conjunctions that must NOT start a chunk
-_WEAK_STARTERS = {"و", "یا", "پس", "اگر", "نه", "چون", "اما",
-                  "خواه", "زیرا", "لیکن", "ولی", "بلکه"}
+_NO_SPLIT_BEFORE = {
+    "را","به","از","با","در","بر","برای","بدون",
+    "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان",
+}
 
 
 # ============================================================
-#  Helpers
+#  Audio helper
 # ============================================================
 def to_int16(audio: np.ndarray) -> np.ndarray:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
 
 
+# ============================================================
+#  Text normalization
+# ============================================================
+_DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
+_REMOVE = re.compile(
+    r'[«»\u201C\u201D\u2018\u2019`´‹›\[\]\(\)\{\}<>|/\\*#@&^~_=+™©®°•·…\u2013\u2014]+'
+)
+_CHAR_MAP = str.maketrans({
+    'ي':'ی','ك':'ک','ة':'ه','ۀ':'ه','ؤ':'و','ئ':'ی','أ':'ا','إ':'ا','ٱ':'ا',
+    '٠':'۰','١':'۱','٢':'۲','٣':'۳','٤':'۴','٥':'۵','٦':'۶','٧':'۷','٨':'۸','٩':'۹',
+    '٫':'.','٬':',',
+})
+
+
+def normalize_persian_text(text: str) -> str:
+    if not text:
+        return ""
+    text = text.translate(_CHAR_MAP)
+    text = _DIACRITICS.sub('', text)
+    text = _REMOVE.sub(' ', text)
+    text = re.sub(r'[ \t\u00A0]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+# ---- Numbers → Persian words ----
+_ONES = ["صفر","یک","دو","سه","چهار","پنج","شش","هفت","هشت","نه"]
+_TEENS = ["ده","یازده","دوازده","سیزده","چهارده","پانزده","شانزده","هفده","هجده","نوزده"]
+_TENS = ["","","بیست","سی","چهل","پنجاه","شصت","هفتاد","هشتاد","نود"]
+_HUNDREDS = ["","صد","دویست","سیصد","چهارصد","پانصد","ششصد","هفتصد","هشتصد","نهصد"]
+_SCALES = ["","هزار","میلیون","میلیارد","تریلیون"]
+
+
+def _three_digit_to_words(n: int) -> str:
+    parts = []
+    h, rest = divmod(n, 100)
+    if h:
+        parts.append(_HUNDREDS[h])
+    if rest:
+        if rest < 10:
+            parts.append(_ONES[rest])
+        elif rest < 20:
+            parts.append(_TEENS[rest - 10])
+        else:
+            t, o = divmod(rest, 10)
+            s = _TENS[t]
+            if o:
+                s += " و " + _ONES[o]
+            parts.append(s)
+    return " و ".join(parts)
+
+
+def int_to_persian_words(n: int) -> str:
+    if n == 0:
+        return _ONES[0]
+    if n < 0:
+        return "منفی " + int_to_persian_words(-n)
+    groups, i = [], 0
+    while n > 0:
+        group = n % 1000
+        if group:
+            w = _three_digit_to_words(group)
+            if _SCALES[i]:
+                w += " " + _SCALES[i]
+            groups.append(w)
+        n //= 1000
+        i += 1
+    return " و ".join(reversed(groups))
+
+
+_NUM_PATTERN = re.compile(r'[0-9۰-۹]+(?:[.,٫][0-9۰-۹]+)?')
+_DIGIT_TRANS = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
+
+
+def _num_repl(m: re.Match) -> str:
+    s = m.group().translate(_DIGIT_TRANS).replace('٫', '.')
+    if ',' in s and '.' not in s:
+        parts = s.split(',')
+        if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+            s = ''.join(parts)
+        else:
+            s = s.replace(',', '.')
+    if '.' in s:
+        ip, dp = s.split('.', 1)
+        iw = int_to_persian_words(int(ip)) if ip else _ONES[0]
+        dw = " ".join(_ONES[int(d)] for d in dp if d.isdigit())
+        return f"{iw} ممیز {dw}".strip()
+    return int_to_persian_words(int(s))
+
+
+def digits_to_words(text: str) -> str:
+    return _NUM_PATTERN.sub(_num_repl, text)
+
+
+# ============================================================
+#  Chunking helpers
+# ============================================================
 def _hard_split_by_words(text, max_chars):
-    """Last-resort splitter: break at word boundaries."""
     words = text.split()
     if not words:
         return [text]
@@ -145,7 +261,6 @@ def _hard_split_by_words(text, max_chars):
 
 
 def _merge_short(chunks, min_chars):
-    """Forward-absorb any chunk shorter than min_chars into its neighbor."""
     if min_chars <= 0:
         return chunks
     merged = []
@@ -154,106 +269,14 @@ def _merge_short(chunks, min_chars):
             merged[-1] = (merged[-1] + " " + c).strip()
         else:
             merged.append(c)
-    # If the very last one is short, merge backward.
     if len(merged) >= 2 and len(merged[-1]) < min_chars:
         merged[-2] = (merged[-2] + " " + merged[-1]).strip()
         merged.pop()
     return merged
 
 
-def _pull_weak_starters_back(chunks):
-    """Merge any chunk starting with a weak conjunction into the previous one."""
-    merged = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        first = c.split(maxsplit=1)[0] if c else ""
-        if merged and first in _WEAK_STARTERS:
-            merged[-1] = (merged[-1] + " " + c).strip()
-        else:
-            merged.append(c)
-    return merged
-
-
-_DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
-_REMOVE = re.compile(
-    r'[«»\u201C\u201D\u2018\u2019`´‹›\[\]\(\)\{\}<>|/\\*#@&^~_=+™©®°•·…\u2013\u2014]+'
-)
-_CHAR_MAP = str.maketrans({
-    'ي':'ی','ك':'ک','ة':'ه','ۀ':'ه','ؤ':'و','ئ':'ی','أ':'ا','إ':'ا','ٱ':'ا',
-    '٠':'۰','١':'۱','٢':'۲','٣':'۳','٤':'۴','٥':'۵','٦':'۶','٧':'۷','٨':'۸','٩':'۹',
-    '٫':'.','٬':',',
-})
-
-def normalize_persian_text(text: str) -> str:
-    if not text:
-        return ""
-    text = text.translate(_CHAR_MAP)
-    text = _DIACRITICS.sub('', text)
-    text = _REMOVE.sub(' ', text)
-    text = re.sub(r'[ \t\u00A0]+', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
-_ONES = ["صفر","یک","دو","سه","چهار","پنج","شش","هفت","هشت","نه"]
-_TEENS = ["ده","یازده","دوازده","سیزده","چهارده","پانزده","شانزده","هفده","هجده","نوزده"]
-_TENS = ["","","بیست","سی","چهل","پنجاه","شصت","هفتاد","هشتاد","نود"]
-_HUNDREDS = ["","صد","دویست","سیصد","چهارصد","پانصد","ششصد","هفتصد","هشتصد","نهصد"]
-_SCALES = ["","هزار","میلیون","میلیارد","تریلیون"]
-
-def _three(n):
-    p = []
-    h, r = divmod(n, 100)
-    if h: p.append(_HUNDREDS[h])
-    if r:
-        if r < 10: p.append(_ONES[r])
-        elif r < 20: p.append(_TEENS[r-10])
-        else:
-            t, o = divmod(r, 10)
-            s = _TENS[t]
-            if o: s += " و " + _ONES[o]
-            p.append(s)
-    return " و ".join(p)
-
-def int_to_persian_words(n):
-    if n == 0: return _ONES[0]
-    if n < 0:  return "منفی " + int_to_persian_words(-n)
-    g, i = [], 0
-    while n > 0:
-        grp = n % 1000
-        if grp:
-            w = _three(grp)
-            if _SCALES[i]: w += " " + _SCALES[i]
-            g.append(w)
-        n //= 1000; i += 1
-    return " و ".join(reversed(g))
-
-_NUM_PATTERN = re.compile(r'[0-9۰-۹]+(?:[.,٫][0-9۰-۹]+)?')
-_DIGIT_TRANS = str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789')
-
-def _num_repl(m):
-    s = m.group().translate(_DIGIT_TRANS).replace('٫','.')
-    if ',' in s and '.' not in s:
-        parts = s.split(',')
-        if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
-            s = ''.join(parts)
-        else:
-            s = s.replace(',', '.')
-    if '.' in s:
-        ip, dp = s.split('.', 1)
-        iw = int_to_persian_words(int(ip)) if ip else _ONES[0]
-        dw = " ".join(_ONES[int(d)] for d in dp if d.isdigit())
-        return f"{iw} ممیز {dw}".strip()
-    return int_to_persian_words(int(s))
-
-def digits_to_words(t):
-    return _NUM_PATTERN.sub(_num_repl, t)
-
-
 # ============================================================
-#  Splitting
+#  Tier 1 — sentence splitting
 # ============================================================
 def split_persian_sentences(text, split_on_comma=True):
     text = normalize_persian_text(text)
@@ -267,45 +290,44 @@ def split_persian_sentences(text, split_on_comma=True):
     return [s.strip() for s in sents if s.strip()]
 
 
-def _find_conj_spans(words):
-    """Return (start, end) spans for each conjunction, longest-match first."""
-    spans, i = [], 0
+# ============================================================
+#  Tier 3 — conjunction splitter
+# ============================================================
+def _find_conj_indices(words):
+    """Return word-index positions where a conjunction starts."""
+    idxs, i = [], 0
     while i < len(words):
         for c in _CONJ_SORTED:
             cw = c.split(); n = len(cw)
-            if i + n <= len(words) and all(words[i+j] == cw[j] for j in range(n)):
-                spans.append((i, i + n))
+            if i + n <= len(words) and all(words[i + j] == cw[j] for j in range(n)):
+                idxs.append(i)
                 i += n - 1
                 break
         i += 1
-    return spans
+    return idxs
 
 
 def split_sentence_at_conjunctions(sentence, max_chars):
-    """
-    Split long sentences at conjunctions. Each conjunction is attached to
-    the END of the preceding segment, so no chunk starts with 'و' / 'یا'.
-    """
+    """Split long sentences at conjunctions. Conjunctions start the new chunk."""
     if len(sentence) <= max_chars:
         return [sentence]
 
     words = sentence.split()
-    spans = _find_conj_spans(words)
-    if len(spans) < MIN_CONJ_SPLITS:
+    idxs = _find_conj_indices(words)
+    if len(idxs) < MIN_CONJ_SPLITS:
         return [sentence]
 
     segs, prev = [], 0
-    for start, end in spans:
-        if start < prev:
+    for idx in idxs:
+        if idx <= prev:
             continue
-        seg = " ".join(words[prev:end]).strip()
+        seg = " ".join(words[prev:idx]).strip()
         if seg:
             segs.append(seg)
-        prev = end
-    if prev < len(words):
-        tail = " ".join(words[prev:]).strip()
-        if tail:
-            segs.append(tail)
+        prev = idx
+    tail = " ".join(words[prev:]).strip()
+    if tail:
+        segs.append(tail)
 
     if len(segs) <= 1:
         return [sentence]
@@ -321,13 +343,16 @@ def split_sentence_at_conjunctions(sentence, max_chars):
     return chunks
 
 
+# ============================================================
+#  Tier 4 — verb splitter
+# ============================================================
 def _find_verb_end_indices(words):
     ends, i = [], 0
     while i < len(words):
         ml = 0
         for ph in _VERB_PHRASES_SORTED:
             pw = ph.split(); n = len(pw)
-            if i + n <= len(words) and all(words[i+j] == pw[j] for j in range(n)):
+            if i + n <= len(words) and all(words[i + j] == pw[j] for j in range(n)):
                 ml = n; break
         if ml == 0 and words[i] in _VERB_WORDS:
             ml = 1
@@ -347,31 +372,35 @@ def split_sentence_at_verbs(sentence, max_chars):
         return [sentence]
     sp = []
     for idx in ve:
-        if idx + 1 < len(words) and words[idx+1] in _NO_SPLIT_BEFORE:
+        if idx + 1 < len(words) and words[idx + 1] in _NO_SPLIT_BEFORE:
             continue
         sp.append(idx)
     if not sp:
         return [sentence]
     segs, prev = [], 0
     for idx in sp:
-        s = " ".join(words[prev:idx+1]).strip()
+        s = " ".join(words[prev:idx + 1]).strip()
         if s: segs.append(s)
         prev = idx + 1
     t = " ".join(words[prev:]).strip()
     if t: segs.append(t)
-    if len(segs) <= 1: return [sentence]
+    if len(segs) <= 1:
+        return [sentence]
     chunks, cur = [], segs[0]
     for s in segs[1:]:
         if len(cur + " " + s) > max_chars and cur.strip():
             chunks.append(cur.strip()); cur = s
         else:
             cur = cur + " " + s
-    if cur.strip(): chunks.append(cur.strip())
+    if cur.strip():
+        chunks.append(cur.strip())
     return chunks
 
 
-def build_chunks(sentences, max_chars, min_chars, drop_letterless):
-    # --- tier 1/2/3 chunking ---
+# ============================================================
+#  Chunk builder
+# ============================================================
+def build_chunks(sentences, max_chars, min_chars):
     chunks = []
     for s in sentences:
         if len(s) <= max_chars:
@@ -381,10 +410,10 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
             chunks.extend(c); continue
         chunks.extend(split_sentence_at_verbs(s, max_chars))
 
-    # --- pipeline: merge → weak-starters → hard split → merge → weak-starters ---
+    # Merge pass #1
     chunks = _merge_short(chunks, min_chars)
-    chunks = _pull_weak_starters_back(chunks)
 
+    # Hard split
     enforced, hard_split_count = [], 0
     for c in chunks:
         c = c.strip()
@@ -402,26 +431,15 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
               f"to honour max_chars={max_chars}")
     chunks = enforced
 
-    # Second merge pass — catches short fragments created by the hard split.
+    # Merge pass #2 (post hard-split)
     chunks = _merge_short(chunks, min_chars)
-    chunks = _pull_weak_starters_back(chunks)
 
-    # Final filter
-    out = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        if drop_letterless and not any(ch.isalpha() for ch in c):
-            continue
-        out.append(c)
-    return out
+    return [c for c in chunks if c.strip()]
 
 
 # ============================================================
-#  Streaming synthesis with diagnostics + rescue
+#  Streaming synthesis
 # ============================================================
-
 def _generate_chunk(chunk_text, frames_after_eos):
     try:
         stream = model.generate_audio_stream(
@@ -435,8 +453,7 @@ def _generate_chunk(chunk_text, frames_after_eos):
 
 
 def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
-                         drop_letterless, rescue, frames_after_eos,
-                         eos_threshold):
+                         rescue, frames_after_eos, eos_threshold):
     if not text or not text.strip():
         yield None
         return
@@ -448,10 +465,7 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
     yield_every = int(sample_rate * YIELD_INTERVAL_SEC)
 
     sentences = split_persian_sentences(text, split_on_comma=split_on_comma)
-    chunks = build_chunks(sentences,
-                          max_chars=int(max_chars),
-                          min_chars=int(min_chars),
-                          drop_letterless=bool(drop_letterless))
+    chunks = build_chunks(sentences, int(max_chars), int(min_chars))
 
     if not chunks:
         yield None
@@ -511,14 +525,11 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
         if produced_samples == 0:
             print(f"  ! chunk {label} produced 0 samples")
-
             if rescue and i + 1 < len(chunks):
                 print(f"  → rescuing: will retry merged with next chunk")
                 buffer_text = chunk_text
                 continue
-
             if rescue:
-                # Last chunk: retry alone with a wider eos_threshold.
                 print(f"  → last chunk: retrying with eos_threshold -= 1.5")
                 orig_eos = model.eos_threshold
                 try:
@@ -537,7 +548,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                         model.eos_threshold = orig_eos
                     except Exception:
                         pass
-
                 if produced_samples == 0:
                     print(f"  ! last chunk still empty after retry; giving up")
                     continue
@@ -589,31 +599,24 @@ with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
                     label="Merge chunks shorter than",
                     minimum=0, maximum=100, step=1,
                     value=DEFAULT_MIN_CHARS,
-                    info="Recommended 30. Merges tiny fragments into "
-                         "their neighbor before generation; short chunks "
-                         "are the model's main failure mode.")
-                opt_letterless = gr.Checkbox(
-                    label="Drop letter-less chunks (pure punctuation)",
-                    value=DEFAULT_DROP_LETTERLESS)
+                    info="Recommended 30. Merges tiny fragments into their "
+                         "neighbor before generation.")
             with gr.Accordion("Model / rescue options", open=False):
                 opt_rescue = gr.Checkbox(
                     label="Rescue silent chunks (retry merged with next chunk)",
-                    value=DEFAULT_RESCUE,
-                    info="ON: if a chunk produces no audio, retry it "
-                         "concatenated with the following chunk.")
+                    value=DEFAULT_RESCUE)
                 opt_fae = gr.Slider(
                     label="frames_after_eos",
                     minimum=0, maximum=16, step=1,
                     value=DEFAULT_FAE,
-                    info="How many latent frames to allow after EOS. "
-                         "0 = current behavior. Try 2–4 if short chunks "
-                         "keep coming back empty.")
+                    info="Latent frames allowed after EOS. Try 2–4 if short "
+                         "chunks come back empty.")
                 opt_eos = gr.Slider(
                     label="eos_threshold (less negative = stops sooner)",
                     minimum=-8.0, maximum=-1.0, step=0.5,
                     value=DEFAULT_EOS_THRESHOLD,
-                    info="Raise toward -2.0 if chunks keep hitting max length "
-                         "without EOS. Lower if speech cuts off too early.")
+                    info="Raise toward -2.0 if generation hits max length "
+                         "without EOS.")
             with gr.Row():
                 btn = gr.Button("Generate", variant="primary")
                 stop_btn = gr.Button("Stop", variant="stop")
@@ -624,7 +627,7 @@ with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
 
     gen_event = btn.click(
         fn=synthesize_streaming,
-        inputs=[txt, opt_max, opt_min, opt_comma, opt_letterless,
+        inputs=[txt, opt_max, opt_min, opt_comma,
                 opt_rescue, opt_fae, opt_eos],
         outputs=out_audio,
     )
