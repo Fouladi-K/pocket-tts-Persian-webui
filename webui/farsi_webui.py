@@ -8,8 +8,6 @@ import pocket_tts.default_parameters as dp
 # ------------------------------------------------------------------
 # Workaround for upstream bug in pocket_tts.models.tts_model:
 #   statistics.mean(steps_times) is called even when steps_times == []
-#   (happens whenever the model produces zero autoregressive steps,
-#    e.g. on very short chunks). Patch it once, globally.
 # ------------------------------------------------------------------
 _orig_mean = statistics.mean
 def _safe_mean(data, *args, **kwargs):
@@ -18,217 +16,123 @@ def _safe_mean(data, *args, **kwargs):
     return _orig_mean(data, *args, **kwargs)
 statistics.mean = _safe_mean
 
-# Override the global token limit before loading the model
-dp.MAX_TOKEN_PER_CHUNK = 50
+dp.MAX_TOKEN_PER_CHUNK = 30          # you set this
 
-# Load the model (CPU by default)
 model = TTSModel.load_model(
     config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml",
-    temp=0.3
+    temp=0.3,
+    # eos_threshold is a load-time parameter; we will override it at runtime
 )
 
-# Load the default voice prompt
-voice_path = "example_voice.wav"
-voice_state = model.get_state_for_audio_prompt(voice_path)
+voice_state = model.get_state_for_audio_prompt("example_voice.wav")
 
-# How often to push new audio to the UI (in seconds of audio)
 YIELD_INTERVAL_SEC = 0.5
 
-# ---- Chunking thresholds ----
-# Tier 1: sentence splitter (punctuation) — always on
-# Tier 2: conjunction splitter — only when sentence > MAX_CHARS_PER_CHUNK
-# Tier 3: verb splitter — only when tiers 1+2 fail
+# ---- Recommended defaults (also exposed in the UI) ----
+DEFAULT_MAX_CHARS       = 100
+DEFAULT_MIN_CHARS       = 30
+DEFAULT_SPLIT_COMMA     = True
+DEFAULT_DROP_LETTERLESS = False
+DEFAULT_RESCUE          = True
+DEFAULT_FAE             = 2
+DEFAULT_EOS_THRESHOLD   = -4.0       # library default
 
-MAX_CHARS_PER_CHUNK = 50
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
 
-# Anything shorter than this (in characters) is merged into the next chunk.
-# Prevents tiny "preamble" fragments from ever reaching the model.
-MIN_CHUNK_CHARS = 1
-
 
 # ============================================================
-#  Conjunctions (fa.wikipedia.org/wiki/حرف_ربط)
+#  Conjunctions
 # ============================================================
-
 _CONJUNCTIONS = [
-    "به شرط آنکه", "به‌شرط آنکه",
-    "از آنجا که", "ازآنجا که",
-    "از این رو", "ازاین‌رو",
-    "با این حال", "بااین‌حال",
-    "با اینکه", "بااینکه",
-    "همین که", "همینکه",
-    "زیرا که", "زیراکه",
-    "چون که", "چونکه",
-    "اگر چه", "اگرچه",
-    "چنان که", "چنانکه",
-    "چنان چه", "چنانچه",
-    "بدان که", "بدانکه",
+    "به شرط آنکه", "به‌شرط آنکه", "از آنجا که", "ازآنجا که",
+    "از این رو", "ازاین‌رو", "با این حال", "بااین‌حال",
+    "با اینکه", "بااینکه", "همین که", "همینکه",
+    "زیرا که", "زیراکه", "چون که", "چونکه",
+    "اگر چه", "اگرچه", "چنان که", "چنانکه",
+    "چنان چه", "چنانچه", "بدان که", "بدانکه",
     "و", "یا", "پس", "اگر", "نه", "چون", "اما",
     "خواه", "زیرا", "لیکن", "ولی", "بلکه",
 ]
-
 _CONJ_SORTED = sorted(_CONJUNCTIONS, key=lambda s: len(s.split()), reverse=True)
 
 
 # ============================================================
-#  Persian verbs (used as clause-end markers — SOV language)
+#  Verbs
 # ============================================================
-
-# Multi-word / perfect forms — matched as a unit, checked first
 _VERB_PHRASES = [
-    # شده است family
-    "شده است", "شده بود", "شده‌اند", "شده بودند",
-    "نشده است", "نشده بود",
-    # کرده است family
-    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند",
-    "نکرده است", "نکرده بود",
-    # رفته است family
+    "شده است", "شده بود", "شده‌اند", "شده بودند", "نشده است", "نشده بود",
+    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند", "نکرده است", "نکرده بود",
     "رفته است", "رفته بود", "رفته‌اند", "رفته بودند",
-    # آمده است family
     "آمده است", "آمده بود", "آمده‌اند",
-    # داده است family
     "داده است", "داده بود", "داده‌اند",
-    # گرفته است family
-    "گرفته است", "گرفته بود",
-    # گفته است family
-    "گفته است", "گفته بود",
-    # دیده است family
-    "دیده است", "دیده بود",
-    # خورده است family
-    "خورده است", "خورده بود",
-    # مانده است family
-    "مانده است", "مانده بود",
-    # خواسته است family
-    "خواسته است", "خواسته بود",
-    # توانسته است family
+    "گرفته است", "گرفته بود", "گفته است", "گفته بود",
+    "دیده است", "دیده بود", "خورده است", "خورده بود",
+    "مانده است", "مانده بود", "خواسته است", "خواسته بود",
     "توانسته است", "توانسته بود",
 ]
-
-# Single-word verb forms
 _VERB_WORDS = {
-    # Copulas & auxiliaries (بودن)
-    "است", "هست", "نیست", "بود", "نبود", "باشد", "نباشد",
-    "هستند", "نیستند", "بودند", "نبودند", "باشند", "نباشند",
-    "هستم", "نیستم", "بودم", "نبودم", "باشم", "نباشم",
-    "هستی", "نیستی", "بودی", "نبودی", "باشی", "نباشی",
-    "هستیم", "نیستیم", "بودیم", "نبودیم", "باشیم", "نباشیم",
-    "هستید", "نیستید", "بودید", "نبودید", "باشید", "نباشید",
-    # شدن family
-    "شد", "نشد", "شده", "نشده",
-    "شدم", "شدی", "شدیم", "شدید", "شدند",
-    "می‌شود", "نمی‌شود", "می‌شوند", "نمی‌شوند",
-    "می‌شد", "نمی‌شد", "می‌شدند", "نمی‌شدند",
-    "بشود", "بشوند",
-    # کردن family
-    "کرد", "نکرد", "کرده", "نکرده",
-    "کردم", "کردی", "کردیم", "کردید", "کردند",
-    "می‌کند", "نمی‌کند", "می‌کنند", "نمی‌کنند",
-    "می‌کرد", "نمی‌کرد", "می‌کردند", "نمی‌کردند",
-    "بکند", "بکنند",
-    # دادن family
-    "داد", "نداد", "داده", "نداده",
-    "دادم", "دادی", "دادیم", "دادید", "دادند",
-    "می‌دهد", "نمی‌دهد", "می‌دهند", "نمی‌دهند",
-    "می‌داد", "نمی‌داد", "بدهد", "بدهند",
-    # گرفتن family
-    "گرفت", "نگرفت", "گرفته", "نگرفته",
-    "گرفتم", "گرفتی", "گرفتیم", "گرفتید", "گرفتند",
-    "می‌گیرد", "نمی‌گیرد", "می‌گیرند", "نمی‌گیرند",
-    "می‌گرفت", "بگیرد", "بگیرند",
-    # رفتن family
-    "رفت", "نرفت", "رفته", "نرفته",
-    "رفتم", "رفتی", "رفتیم", "رفتید", "رفتند",
-    "می‌رود", "نمی‌رود", "می‌روند", "نمی‌روند",
-    "می‌رفت", "برود", "بروند",
-    # آمدن family
-    "آمد", "نیامد", "آمده", "نیامده",
-    "آمدم", "آمدی", "آمدیم", "آمدید", "آمدند",
-    "می‌آید", "نمی‌آید", "می‌آیند", "نمی‌آیند",
-    "می‌آمد", "بیاید", "بیایند",
-    # گفتن family
-    "گفت", "نگفت", "گفته", "نگفته",
-    "گفتم", "گفتی", "گفتیم", "گفتید", "گفتند",
-    "می‌گوید", "نمی‌گوید", "می‌گویند",
-    "می‌گفت", "بگوید", "بگویند",
-    # دیدن family
-    "دید", "ندید", "دیده", "ندیده",
-    "دیدم", "دیدی", "دیدیم", "دیدند",
-    "می‌بیند", "نمی‌بیند", "می‌بینند",
-    "می‌دید", "ببیند", "ببینند",
-    # خوردن family
-    "خورد", "نخورد", "خورده", "نخورده",
-    "خوردم", "خوردی", "خوردند",
-    "می‌خورد", "نمی‌خورد", "می‌خورند",
-    "بخورد", "بخورند",
-    # ماندن family
-    "ماند", "نماند", "مانده", "نمانده",
-    "ماندم", "ماندند",
-    "می‌ماند", "نمی‌ماند", "بماند", "بمانند",
-    # خواستن family
-    "خواست", "نخواست", "خواسته", "نخواسته",
-    "خواستم", "خواستند",
-    "می‌خواهد", "نمی‌خواهد", "می‌خواهند",
-    "بخواهد", "بخواهند",
-    # توانستن family
-    "توانست", "نتوانست", "توانسته", "نتوانسته",
-    "می‌تواند", "نمی‌تواند", "می‌توانند", "نمی‌توانند",
-    "بتواند", "بتوانند",
-    # دیگر افعال پرکاربرد
-    "رسید", "نرسید", "رسیده", "می‌رسد", "برسد",
-    "افتاد", "افتاده", "می‌افتد", "بیفتد",
-    "نشست", "نشسته", "می‌نشیند", "بنشیند",
-    "ایستاد", "ایستاده", "می‌ایستد", "بایستد",
-    "برگشت", "برگشته", "برمی‌گردد", "برگردد",
-    "مرد", "مرده", "می‌میرد", "بمیرد",
-    "خرید", "خریده", "می‌خرد", "بخرد",
-    "فروخت", "فروخته", "می‌فروشد", "بفروشد",
-    "نوشت", "نوشته", "می‌نویسد", "بنویسد",
-    "خواند", "خوانده", "می‌خواند", "بخواند",
-    "شنید", "شنیده", "می‌شنود", "بشنود",
-    "دانست", "دانسته", "می‌داند", "بداند",
-    "فهمید", "فهمیده", "می‌فهمد", "بفهمد",
+    "است","هست","نیست","بود","نبود","باشد","نباشد",
+    "هستند","نیستند","بودند","نبودند","باشند","نباشند",
+    "هستم","نیستم","بودم","نبودم","باشم","نباشم",
+    "هستی","نیستی","بودی","نبودی","باشی","نباشی",
+    "هستیم","نیستیم","بودیم","نبودیم","باشیم","نباشیم",
+    "هستید","نیستید","بودید","نبودید","باشید","نباشید",
+    "شد","نشد","شده","نشده","شدم","شدی","شدیم","شدید","شدند",
+    "می‌شود","نمی‌شود","می‌شوند","نمی‌شوند","می‌شد","نمی‌شد",
+    "می‌شدند","نمی‌شدند","بشود","بشوند",
+    "کرد","نکرد","کرده","نکرده","کردم","کردی","کردیم","کردید","کردند",
+    "می‌کند","نمی‌کند","می‌کنند","نمی‌کنند","می‌کرد","نمی‌کرد",
+    "می‌کردند","نمی‌کردند","بکند","بکنند",
+    "داد","نداد","داده","نداده","دادم","دادی","دادیم","دادید","دادند",
+    "می‌دهد","نمی‌دهد","می‌دهند","نمی‌دهند","می‌داد","نمی‌داد","بدهد","بدهند",
+    "گرفت","نگرفت","گرفته","نگرفته","گرفتم","گرفتی","گرفتیم","گرفتید","گرفتند",
+    "می‌گیرد","نمی‌گیرد","می‌گیرند","نمی‌گیرند","می‌گرفت","بگیرد","بگیرند",
+    "رفت","نرفت","رفته","نرفته","رفتم","رفتی","رفتیم","رفتید","رفتند",
+    "می‌رود","نمی‌رود","می‌روند","نمی‌روند","می‌رفت","برود","بروند",
+    "آمد","نیامد","آمده","نیامده","آمدم","آمدی","آمدیم","آمدید","آمدند",
+    "می‌آید","نمی‌آید","می‌آیند","نمی‌آیند","می‌آمد","بیاید","بیایند",
+    "گفت","نگفت","گفته","نگفته","گفتم","گفتی","گفتیم","گفتید","گفتند",
+    "می‌گوید","نمی‌گوید","می‌گویند","می‌گفت","بگوید","بگویند",
+    "دید","ندید","دیده","ندیده","دیدم","دیدی","دیدیم","دیدند",
+    "می‌بیند","نمی‌بیند","می‌بینند","می‌دید","ببیند","ببینند",
+    "خورد","نخورد","خورده","نخورده","خوردم","خوردی","خوردند",
+    "می‌خورد","نمی‌خورد","می‌خورند","بخورد","بخورند",
+    "ماند","نماند","مانده","نمانده","ماندم","ماندند",
+    "می‌ماند","نمی‌ماند","بماند","بمانند",
+    "خواست","نخواست","خواسته","نخواسته","خواستم","خواستند",
+    "می‌خواهد","نمی‌خواهد","می‌خواهند","بخواهد","بخواهند",
+    "توانست","نتوانست","توانسته","نتوانسته",
+    "می‌تواند","نمی‌تواند","می‌توانند","نمی‌توانند","بتواند","بتوانند",
+    "رسید","نرسید","رسیده","می‌رسد","برسد","افتاد","افتاده","می‌افتد","بیفتد",
+    "نشست","نشسته","می‌نشیند","بنشیند","ایستاد","ایستاده","می‌ایستد","بایستد",
+    "برگشت","برگشته","برمی‌گردد","برگردد","مرد","مرده","می‌میرد","بمیرد",
+    "خرید","خریده","می‌خرد","بخرد","فروخت","فروخته","می‌فروشد","بفروشد",
+    "نوشت","نوشته","می‌نویسد","بنویسد","خواند","خوانده","می‌خواند","بخواند",
+    "شنید","شنیده","می‌شنود","بشنود","دانست","دانسته","می‌داند","بداند",
+    "فهمید","فهمیده","می‌فهمد","بفهمد",
 }
-
-# All verb phrases, sorted longest-first (word count desc)
 _VERB_PHRASES_SORTED = sorted(_VERB_PHRASES, key=lambda s: len(s.split()), reverse=True)
-
-# Function words that should NOT start a new chunk
-_NO_SPLIT_BEFORE = {
-    "را", "به", "از", "با", "در", "بر", "برای", "بدون",
-    "توسط", "نزد", "پیش", "روی", "زیر", "بالای", "کنار", "بین", "میان",
-}
+_NO_SPLIT_BEFORE = {"را","به","از","با","در","بر","برای","بدون",
+                    "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان"}
 
 
 # ============================================================
-#  Audio helper
+#  Helpers
 # ============================================================
-
 def to_int16(audio: np.ndarray) -> np.ndarray:
-    """Convert float32 [-1, 1] audio to int16 PCM."""
-    audio = np.clip(audio, -1.0, 1.0)
-    return (audio * 32767.0).astype(np.int16)
+    return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
 
-
-# ============================================================
-#  Persian text normalization
-# ============================================================
 
 _DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
-
 _REMOVE = re.compile(
     r'[«»\u201C\u201D\u2018\u2019`´‹›\[\]\(\)\{\}<>|/\\*#@&^~_=+™©®°•·…\u2013\u2014]+'
 )
-
 _CHAR_MAP = str.maketrans({
-    'ي': 'ی', 'ك': 'ک', 'ة': 'ه', 'ۀ': 'ه',
-    'ؤ': 'و', 'ئ': 'ی', 'أ': 'ا', 'إ': 'ا', 'ٱ': 'ا',
-    '٠': '۰', '١': '۱', '٢': '۲', '٣': '۳', '٤': '۴',
-    '٥': '۵', '٦': '۶', '٧': '۷', '٨': '۸', '٩': '۹',
-    '٫': '.', '٬': ',',
+    'ي':'ی','ك':'ک','ة':'ه','ۀ':'ه','ؤ':'و','ئ':'ی','أ':'ا','إ':'ا','ٱ':'ا',
+    '٠':'۰','١':'۱','٢':'۲','٣':'۳','٤':'۴','٥':'۵','٦':'۶','٧':'۷','٨':'۸','٩':'۹',
+    '٫':'.','٬':',',
 })
-
 
 def normalize_persian_text(text: str) -> str:
     if not text:
@@ -241,64 +145,44 @@ def normalize_persian_text(text: str) -> str:
     return text.strip()
 
 
-# ============================================================
-#  Persian number -> words
-# ============================================================
+_ONES = ["صفر","یک","دو","سه","چهار","پنج","شش","هفت","هشت","نه"]
+_TEENS = ["ده","یازده","دوازده","سیزده","چهارده","پانزده","شانزده","هفده","هجده","نوزده"]
+_TENS = ["","","بیست","سی","چهل","پنجاه","شصت","هفتاد","هشتاد","نود"]
+_HUNDREDS = ["","صد","دویست","سیصد","چهارصد","پانصد","ششصد","هفتصد","هشتصد","نهصد"]
+_SCALES = ["","هزار","میلیون","میلیارد","تریلیون"]
 
-_ONES = ["صفر", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه"]
-_TEENS = ["ده", "یازده", "دوازده", "سیزده", "چهارده", "پانزده",
-          "شانزده", "هفده", "هجده", "نوزده"]
-_TENS = ["", "", "بیست", "سی", "چهل", "پنجاه", "شصت", "هفتاد", "هشتاد", "نود"]
-_HUNDREDS = ["", "صد", "دویست", "سیصد", "چهارصد",
-             "پانصد", "ششصد", "هفتصد", "هشتصد", "نهصد"]
-_SCALES = ["", "هزار", "میلیون", "میلیارد", "تریلیون"]
-
-
-def _three_digit_to_words(n: int) -> str:
-    parts = []
-    h, rest = divmod(n, 100)
-    if h:
-        parts.append(_HUNDREDS[h])
-    if rest:
-        if rest < 10:
-            parts.append(_ONES[rest])
-        elif rest < 20:
-            parts.append(_TEENS[rest - 10])
+def _three(n):
+    p = []
+    h, r = divmod(n, 100)
+    if h: p.append(_HUNDREDS[h])
+    if r:
+        if r < 10: p.append(_ONES[r])
+        elif r < 20: p.append(_TEENS[r-10])
         else:
-            t, o = divmod(rest, 10)
+            t, o = divmod(r, 10)
             s = _TENS[t]
-            if o:
-                s += " و " + _ONES[o]
-            parts.append(s)
-    return " و ".join(parts)
+            if o: s += " و " + _ONES[o]
+            p.append(s)
+    return " و ".join(p)
 
-
-def int_to_persian_words(n: int) -> str:
-    if n == 0:
-        return _ONES[0]
-    if n < 0:
-        return "منفی " + int_to_persian_words(-n)
-    groups = []
-    i = 0
+def int_to_persian_words(n):
+    if n == 0: return _ONES[0]
+    if n < 0:  return "منفی " + int_to_persian_words(-n)
+    g, i = [], 0
     while n > 0:
-        group = n % 1000
-        if group:
-            words = _three_digit_to_words(group)
-            if _SCALES[i]:
-                words += " " + _SCALES[i]
-            groups.append(words)
-        n //= 1000
-        i += 1
-    return " و ".join(reversed(groups))
-
+        grp = n % 1000
+        if grp:
+            w = _three(grp)
+            if _SCALES[i]: w += " " + _SCALES[i]
+            g.append(w)
+        n //= 1000; i += 1
+    return " و ".join(reversed(g))
 
 _NUM_PATTERN = re.compile(r'[0-9۰-۹]+(?:[.,٫][0-9۰-۹]+)?')
-_DIGIT_TRANS = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
+_DIGIT_TRANS = str.maketrans('۰۱۲۳۴۵۶۷۸۹','0123456789')
 
-
-def _num_repl(m: re.Match) -> str:
-    s = m.group().translate(_DIGIT_TRANS)
-    s = s.replace('٫', '.')
+def _num_repl(m):
+    s = m.group().translate(_DIGIT_TRANS).replace('٫','.')
     if ',' in s and '.' not in s:
         parts = s.split(',')
         if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
@@ -306,346 +190,338 @@ def _num_repl(m: re.Match) -> str:
         else:
             s = s.replace(',', '.')
     if '.' in s:
-        int_part, dec_part = s.split('.', 1)
-        int_words = int_to_persian_words(int(int_part)) if int_part else _ONES[0]
-        dec_words = " ".join(_ONES[int(d)] for d in dec_part if d.isdigit())
-        return f"{int_words} ممیز {dec_words}".strip()
+        ip, dp = s.split('.', 1)
+        iw = int_to_persian_words(int(ip)) if ip else _ONES[0]
+        dw = " ".join(_ONES[int(d)] for d in dp if d.isdigit())
+        return f"{iw} ممیز {dw}".strip()
     return int_to_persian_words(int(s))
 
-
-def digits_to_words(text: str) -> str:
-    return _NUM_PATTERN.sub(_num_repl, text)
+def digits_to_words(t):
+    return _NUM_PATTERN.sub(_num_repl, t)
 
 
 # ============================================================
-#  Sentence splitting (Tier 1)
+#  Splitting
 # ============================================================
-
-def split_persian_sentences(text: str):
+def split_persian_sentences(text, split_on_comma=True):
     text = normalize_persian_text(text)
     text = digits_to_words(text)
-    # NOTE: we deliberately do NOT split on the comma "،" — a comma is a
-    # pause, not a sentence boundary, and splitting on it produces tiny
-    # fragments that crash the TTS model. Only . ? ! ; trigger a split.
-    text = re.sub(r'([.?!؛])(\S)', r'\1 \2', text)
-    sentences = re.split(r'(?<=[.?!؛])\s+', text)
-    return [s.strip() for s in sentences if s.strip()]
+    if split_on_comma:
+        text = re.sub(r'([.?!؛،])(\S)', r'\1 \2', text)
+        sents = re.split(r'(?<=[.?!؛،])\s+', text)
+    else:
+        text = re.sub(r'([.?!؛])(\S)', r'\1 \2', text)
+        sents = re.split(r'(?<=[.?!؛])\s+', text)
+    return [s.strip() for s in sents if s.strip()]
 
-
-# ============================================================
-#  Conjunction splitter (Tier 2)
-# ============================================================
-
-def _find_conjunction_indices(words):
-    indices = []
-    i = 0
+def _find_conj_indices(words):
+    idxs, i = [], 0
     while i < len(words):
-        for conj in _CONJ_SORTED:
-            conj_words = conj.split()
-            n = len(conj_words)
-            if i + n <= len(words):
-                if all(words[i + j] == conj_words[j] for j in range(n)):
-                    indices.append(i)
-                    break
+        for c in _CONJ_SORTED:
+            cw = c.split(); n = len(cw)
+            if i + n <= len(words) and all(words[i+j] == cw[j] for j in range(n)):
+                idxs.append(i); break
         i += 1
-    return indices
+    return idxs
 
-
-def split_sentence_at_conjunctions(sentence: str, max_chars: int = MAX_CHARS_PER_CHUNK):
+def split_sentence_at_conjunctions(sentence, max_chars):
     if len(sentence) <= max_chars:
         return [sentence]
-
     words = sentence.split()
-    conj_indices = _find_conjunction_indices(words)
-
-    if len(conj_indices) < MIN_CONJ_SPLITS:
+    ci = _find_conj_indices(words)
+    if len(ci) < MIN_CONJ_SPLITS:
         return [sentence]
-
-    segments = []
-    prev_idx = 0
-    for idx in conj_indices:
-        if idx > prev_idx:
-            segment = " ".join(words[prev_idx:idx]).strip()
-            if segment:
-                segments.append(segment)
-        prev_idx = idx
-    tail = " ".join(words[prev_idx:]).strip()
-    if tail:
-        segments.append(tail)
-
-    if len(segments) <= 1:
-        return [sentence]
-
-    chunks = []
-    current = segments[0]
-    for seg in segments[1:]:
-        candidate = current + " " + seg
-        if len(candidate) > max_chars and current.strip():
-            chunks.append(current.strip())
-            current = seg
+    segs, prev = [], 0
+    for idx in ci:
+        if idx > prev:
+            s = " ".join(words[prev:idx]).strip()
+            if s: segs.append(s)
+        prev = idx
+    t = " ".join(words[prev:]).strip()
+    if t: segs.append(t)
+    if len(segs) <= 1: return [sentence]
+    chunks, cur = [], segs[0]
+    for s in segs[1:]:
+        if len(cur + " " + s) > max_chars and cur.strip():
+            chunks.append(cur.strip()); cur = s
         else:
-            current = candidate
-    if current.strip():
-        chunks.append(current.strip())
-
+            cur = cur + " " + s
+    if cur.strip(): chunks.append(cur.strip())
     return chunks
-
-
-# ============================================================
-#  Verb splitter (Tier 3 — SOV clause ends)
-# ============================================================
 
 def _find_verb_end_indices(words):
-    """Return the index of the LAST word of each verb form found."""
-    end_indices = []
-    i = 0
+    ends, i = [], 0
     while i < len(words):
-        matched_len = 0
-        # Multi-word phrases first (longest match)
-        for phrase in _VERB_PHRASES_SORTED:
-            phrase_words = phrase.split()
-            n = len(phrase_words)
-            if i + n <= len(words):
-                if all(words[i + j] == phrase_words[j] for j in range(n)):
-                    matched_len = n
-                    break
-        # Then single-word verbs
-        if matched_len == 0 and words[i] in _VERB_WORDS:
-            matched_len = 1
-
-        if matched_len > 0:
-            end_indices.append(i + matched_len - 1)
-            i += matched_len
+        ml = 0
+        for ph in _VERB_PHRASES_SORTED:
+            pw = ph.split(); n = len(pw)
+            if i + n <= len(words) and all(words[i+j] == pw[j] for j in range(n)):
+                ml = n; break
+        if ml == 0 and words[i] in _VERB_WORDS:
+            ml = 1
+        if ml > 0:
+            ends.append(i + ml - 1); i += ml
         else:
             i += 1
-    return end_indices
+    return ends
 
-
-def split_sentence_at_verbs(sentence: str, max_chars: int = MAX_CHARS_PER_CHUNK):
-    """
-    Tier-3 fallback. Splits AFTER a verb form (Persian is SOV, so the verb
-    usually closes a clause). Skips split points where the next word is a
-    function word like را / به / از (those should not start a chunk).
-    """
+def split_sentence_at_verbs(sentence, max_chars):
     if len(sentence) <= max_chars:
         return [sentence]
-
     words = sentence.split()
-    verb_end_indices = _find_verb_end_indices(words)
-
-    if len(verb_end_indices) < MIN_VERB_SPLITS:
+    ve = _find_verb_end_indices(words)
+    if len(ve) < MIN_VERB_SPLITS:
         return [sentence]
-
-    split_points = []
-    for idx in verb_end_indices:
-        if idx + 1 < len(words):
-            next_word = words[idx + 1]
-            if next_word in _NO_SPLIT_BEFORE:
-                continue
-        split_points.append(idx)
-
-    if not split_points:
+    sp = []
+    for idx in ve:
+        if idx + 1 < len(words) and words[idx+1] in _NO_SPLIT_BEFORE:
+            continue
+        sp.append(idx)
+    if not sp:
         return [sentence]
-
-    segments = []
-    prev = 0
-    for idx in split_points:
-        segment = " ".join(words[prev:idx + 1]).strip()
-        if segment:
-            segments.append(segment)
+    segs, prev = [], 0
+    for idx in sp:
+        s = " ".join(words[prev:idx+1]).strip()
+        if s: segs.append(s)
         prev = idx + 1
-    tail = " ".join(words[prev:]).strip()
-    if tail:
-        segments.append(tail)
-
-    if len(segments) <= 1:
-        return [sentence]
-
-    chunks = []
-    current = segments[0]
-    for seg in segments[1:]:
-        candidate = current + " " + seg
-        if len(candidate) > max_chars and current.strip():
-            chunks.append(current.strip())
-            current = seg
+    t = " ".join(words[prev:]).strip()
+    if t: segs.append(t)
+    if len(segs) <= 1: return [sentence]
+    chunks, cur = [], segs[0]
+    for s in segs[1:]:
+        if len(cur + " " + s) > max_chars and cur.strip():
+            chunks.append(cur.strip()); cur = s
         else:
-            current = candidate
-    if current.strip():
-        chunks.append(current.strip())
-
+            cur = cur + " " + s
+    if cur.strip(): chunks.append(cur.strip())
     return chunks
 
+def build_chunks(sentences, max_chars, min_chars, drop_letterless):
+    chunks = []
+    for s in sentences:
+        if len(s) <= max_chars:
+            chunks.append(s); continue
+        c = split_sentence_at_conjunctions(s, max_chars)
+        if len(c) > 1:
+            chunks.extend(c); continue
+        chunks.extend(split_sentence_at_verbs(s, max_chars))
 
-# ============================================================
-#  Chunk builder — tiers in order
-# ============================================================
+    if min_chars > 0:
+        merged = []
+        for c in chunks:
+            if merged and len(merged[-1]) < min_chars:
+                merged[-1] = (merged[-1] + " " + c).strip()
+            else:
+                merged.append(c)
+        if len(merged) >= 2 and len(merged[-1]) < min_chars:
+            merged[-2] = (merged[-2] + " " + merged[-1]).strip()
+            merged.pop()
+        chunks = merged
 
-def _merge_short_chunks(chunks):
-    """
-    Merge any chunk shorter than MIN_CHUNK_CHARS into the following one.
-    Also drop chunks that have no letters at all (pure punctuation / numbers
-    that escaped normalization).
-    """
-    merged = []
+    out = []
     for c in chunks:
         c = c.strip()
         if not c:
             continue
-        if merged and len(merged[-1]) < MIN_CHUNK_CHARS:
-            merged[-1] = (merged[-1] + " " + c).strip()
-        else:
-            merged.append(c)
-    # If the very last one is still too short, merge it backwards.
-    if len(merged) >= 2 and len(merged[-1]) < MIN_CHUNK_CHARS:
-        merged[-2] = (merged[-2] + " " + merged[-1]).strip()
-        merged.pop()
-    return [c for c in merged if any(ch.isalpha() for ch in c)]
-
-
-def build_chunks(sentences):
-    chunks = []
-    for sentence in sentences:
-        # Tier 1: sentence already short enough
-        if len(sentence) <= MAX_CHARS_PER_CHUNK:
-            chunks.append(sentence)
+        if drop_letterless and not any(ch.isalpha() for ch in c):
             continue
-
-        # Tier 2: split at conjunctions
-        conj_chunks = split_sentence_at_conjunctions(sentence)
-        if len(conj_chunks) > 1:
-            chunks.extend(conj_chunks)
-            continue
-
-        # Tier 3: split after verbs
-        verb_chunks = split_sentence_at_verbs(sentence)
-        chunks.extend(verb_chunks)
-
-    return _merge_short_chunks(chunks)
+        out.append(c)
+    return out
 
 
 # ============================================================
-#  Streaming synthesis
+#  Streaming synthesis with diagnostics + rescue
 # ============================================================
 
-def synthesize_streaming(text):
+def _generate_chunk(chunk_text, frames_after_eos):
+    """Yield float32 numpy frames from the model for one chunk."""
+    try:
+        stream = model.generate_audio_stream(
+            voice_state, chunk_text, frames_after_eos=frames_after_eos
+        )
+    except TypeError:
+        stream = model.generate_audio_stream(voice_state, chunk_text)
+    for frame in stream:
+        arr = frame.numpy() if hasattr(frame, "numpy") else np.asarray(frame)
+        yield arr.astype(np.float32).reshape(-1)
+
+
+def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
+                         drop_letterless, rescue, frames_after_eos,
+                         eos_threshold):
     if not text or not text.strip():
         yield None
         return
 
+    # ------------------------------------------------------------
+    # Apply the runtime eos_threshold to the model instance.
+    # This is read inside _run_flow_lm() on every generation step,
+    # so it takes effect immediately for all chunks in this run.
+    # ------------------------------------------------------------
+    model.eos_threshold = float(eos_threshold)
+    print(f"→ eos_threshold set to {model.eos_threshold}")
+
     sample_rate = model.sample_rate
     yield_every = int(sample_rate * YIELD_INTERVAL_SEC)
 
-    sentences = split_persian_sentences(text)
-    chunks = build_chunks(sentences)
+    sentences = split_persian_sentences(text, split_on_comma=split_on_comma)
+    chunks = build_chunks(sentences,
+                          max_chars=int(max_chars),
+                          min_chars=int(min_chars),
+                          drop_letterless=bool(drop_letterless))
 
     if not chunks:
         yield None
         return
 
+    print(f"→ {len(chunks)} chunks queued (max={max_chars}, min={min_chars}, "
+          f"comma={split_on_comma}, rescue={rescue}, fae={frames_after_eos})")
+
     pending_audio = np.zeros(0, dtype=np.float32)
     samples_since_yield = 0
+    buffer_text = None   # carries a rescued chunk forward
 
-    def flush():
-        """Yield pending audio (if any) and reset the accumulator."""
+    def emit(force=False):
         nonlocal pending_audio, samples_since_yield
-        if len(pending_audio) > 0:
-            out = (sample_rate, to_int16(pending_audio))
-            pending_audio = np.zeros(0, dtype=np.float32)
-            samples_since_yield = 0
-            return out
+        if force or samples_since_yield >= yield_every:
+            if len(pending_audio) > 0:
+                out = (sample_rate, to_int16(pending_audio))
+                pending_audio = np.zeros(0, dtype=np.float32)
+                samples_since_yield = 0
+                return out
         return None
 
-    for i, chunk_text in enumerate(chunks):
-        if not chunk_text.strip():
+    for i, raw_chunk in enumerate(chunks):
+        if not raw_chunk.strip():
             continue
 
-        print(f"Streaming chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars): "
+        if buffer_text:
+            chunk_text = buffer_text + " " + raw_chunk
+            buffer_text = None
+            label = f"{i+1}/{len(chunks)} [+rescued]"
+        else:
+            chunk_text = raw_chunk
+            label = f"{i+1}/{len(chunks)}"
+
+        print(f"Streaming chunk {label} ({len(chunk_text)} chars): "
               f"{chunk_text[:60]}...")
 
+        produced_samples = 0
         try:
-            try:
-                stream = model.generate_audio_stream(
-                    voice_state, chunk_text, frames_after_eos=0
-                )
-            except TypeError:
-                stream = model.generate_audio_stream(voice_state, chunk_text)
-
-            for frame in stream:
-                frame_np = (frame.numpy() if hasattr(frame, "numpy")
-                            else np.asarray(frame))
-                frame_np = frame_np.astype(np.float32).reshape(-1)
-
+            for frame_np in _generate_chunk(chunk_text, frames_after_eos):
+                produced_samples += len(frame_np)
                 pending_audio = np.concatenate([pending_audio, frame_np])
                 samples_since_yield += len(frame_np)
-
-                if samples_since_yield >= yield_every:
-                    yield (sample_rate, to_int16(pending_audio))
-                    pending_audio = np.zeros(0, dtype=np.float32)
-                    samples_since_yield = 0
-
+                out = emit()
+                if out is not None:
+                    yield out
         except Exception as e:
-            # A single bad chunk should not kill the whole request.
-            print(f"  ! chunk {i+1} failed ({type(e).__name__}: {e}); skipping")
-            flushed = flush()
-            if flushed is not None:
-                yield flushed
+            print(f"  ! chunk {label} raised {type(e).__name__}: {e}")
+            if len(pending_audio) > 0:
+                yield (sample_rate, to_int16(pending_audio))
+                pending_audio = np.zeros(0, dtype=np.float32)
+                samples_since_yield = 0
+            if rescue and i + 1 < len(chunks):
+                print(f"  → rescuing chunk by merging with next")
+                buffer_text = chunk_text
             continue
 
-        # small pause between chunks for natural pacing
+        if produced_samples == 0:
+            print(f"  ! chunk {label} produced 0 samples (model returned no audio)")
+            if rescue and i + 1 < len(chunks):
+                print(f"  → rescuing: will retry merged with next chunk")
+                buffer_text = chunk_text
+                continue
+            # no rescue possible / disabled: don't add a silence gap
+            continue
+
+        # Only add inter-chunk silence when the chunk actually produced audio
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
+        samples_since_yield += len(silence)
+        out = emit(force=True)
+        if out is not None:
+            yield out
 
-        if len(pending_audio) > 0:
-            yield (sample_rate, to_int16(pending_audio))
-            pending_audio = np.zeros(0, dtype=np.float32)
-            samples_since_yield = 0
+    # Leftover rescue text at the very end
+    if buffer_text and buffer_text.strip():
+        print(f"Streaming final rescued chunk: {buffer_text[:60]}...")
+        try:
+            for frame_np in _generate_chunk(buffer_text, frames_after_eos):
+                pending_audio = np.concatenate([pending_audio, frame_np])
+                samples_since_yield += len(frame_np)
+                out = emit()
+                if out is not None:
+                    yield out
+        except Exception as e:
+            print(f"  ! final rescued chunk failed: {e}")
 
     if len(pending_audio) > 0:
         yield (sample_rate, to_int16(pending_audio))
 
 
 # ============================================================
-#  Gradio UI
+#  UI
 # ============================================================
-
 with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
     gr.Markdown(
         "## Pocket TTS - Farsi (Persian) — Streaming\n"
-        "Paste Persian text and press **Generate**. Audio starts playing "
-        "as soon as the first chunk is ready. Press **Stop** to cancel "
-        "mid-generation.\n\n"
-        "*Long sentences are split in three tiers: (1) sentence boundaries, "
-        "(2) Persian conjunctions, (3) Persian verbs (SOV clause ends).*"
+        "Paste Persian text and press **Generate**."
     )
     with gr.Row():
         with gr.Column():
-            txt = gr.Textbox(
-                label="Persian Text",
-                lines=10,
-                placeholder="متن طولانی خود را اینجا وارد کنید..."
-            )
+            txt = gr.Textbox(label="Persian Text", lines=10,
+                             placeholder="متن طولانی خود را اینجا وارد کنید...")
+            with gr.Accordion("Chunking options", open=False):
+                opt_comma = gr.Checkbox(
+                    label="Split sentences on comma (،)",
+                    value=DEFAULT_SPLIT_COMMA)
+                opt_max = gr.Slider(
+                    label="Max characters per chunk",
+                    minimum=20, maximum=500, step=10,
+                    value=DEFAULT_MAX_CHARS)
+                opt_min = gr.Slider(
+                    label="Merge chunks shorter than (0 = off)",
+                    minimum=0, maximum=100, step=1,
+                    value=DEFAULT_MIN_CHARS)
+                opt_letterless = gr.Checkbox(
+                    label="Drop letter-less chunks (pure punctuation)",
+                    value=DEFAULT_DROP_LETTERLESS)
+            with gr.Accordion("Model / rescue options", open=False):
+                opt_rescue = gr.Checkbox(
+                    label="Rescue silent chunks (retry merged with next chunk)",
+                    value=DEFAULT_RESCUE,
+                    info="ON: if a chunk produces no audio, retry it "
+                         "concatenated with the following chunk.")
+                opt_fae = gr.Slider(
+                    label="frames_after_eos",
+                    minimum=0, maximum=16, step=1,
+                    value=DEFAULT_FAE,
+                    info="How many latent frames to allow after EOS. "
+                         "0 = current behavior. Try 2–4 if short chunks "
+                         "keep coming back empty.")
+                opt_eos = gr.Slider(
+                    label="eos_threshold (less negative = stops sooner)",
+                    minimum=-8.0, maximum=-1.0, step=0.5,
+                    value=DEFAULT_EOS_THRESHOLD,
+                    info="Raise toward -2.0 if chunks keep hitting max length "
+                         "without EOS. Lower if speech cuts off too early.")
             with gr.Row():
                 btn = gr.Button("Generate", variant="primary")
                 stop_btn = gr.Button("Stop", variant="stop")
             clear = gr.ClearButton([txt], value="Clear Text")
         with gr.Column():
-            out_audio = gr.Audio(
-                label="Generated Speech",
-                type="numpy",
-                autoplay=True,
-                streaming=True,
-            )
+            out_audio = gr.Audio(label="Generated Speech",
+                                 type="numpy", autoplay=True, streaming=True)
 
+    # All 8 inputs wired — this is what fixes the earlier
+    # "didn't receive enough input values (needed: 7, got: 5)" error.
     gen_event = btn.click(
         fn=synthesize_streaming,
-        inputs=txt,
+        inputs=[txt, opt_max, opt_min, opt_comma, opt_letterless,
+                opt_rescue, opt_fae, opt_eos],
         outputs=out_audio,
     )
-    stop_btn.click(
-        fn=None,
-        inputs=None,
-        outputs=None,
-        cancels=[gen_event],
-    )
+    stop_btn.click(fn=None, inputs=None, outputs=None, cancels=[gen_event])
 
 iface.queue().launch(server_name="0.0.0.0", server_port=7860)
