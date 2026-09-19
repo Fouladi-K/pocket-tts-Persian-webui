@@ -6,8 +6,7 @@ import statistics
 import pocket_tts.default_parameters as dp
 
 # ------------------------------------------------------------------
-# Workaround for upstream bug in pocket_tts.models.tts_model:
-#   statistics.mean(steps_times) is called even when steps_times == []
+# Workaround for upstream bug: statistics.mean(steps_times) with empty list
 # ------------------------------------------------------------------
 _orig_mean = statistics.mean
 def _safe_mean(data, *args, **kwargs):
@@ -16,26 +15,23 @@ def _safe_mean(data, *args, **kwargs):
     return _orig_mean(data, *args, **kwargs)
 statistics.mean = _safe_mean
 
-dp.MAX_TOKEN_PER_CHUNK = 30          # you set this
+dp.MAX_TOKEN_PER_CHUNK = 30
 
 model = TTSModel.load_model(
     config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml",
     temp=0.3,
-    # eos_threshold is a load-time parameter; we will override it at runtime
 )
-
 voice_state = model.get_state_for_audio_prompt("example_voice.wav")
 
 YIELD_INTERVAL_SEC = 0.5
 
-# ---- Recommended defaults (also exposed in the UI) ----
 DEFAULT_MAX_CHARS       = 100
-DEFAULT_MIN_CHARS       = 30
-DEFAULT_SPLIT_COMMA     = True
+DEFAULT_MIN_CHARS       = 20
+DEFAULT_SPLIT_COMMA     = False
 DEFAULT_DROP_LETTERLESS = False
 DEFAULT_RESCUE          = True
 DEFAULT_FAE             = 2
-DEFAULT_EOS_THRESHOLD   = -4.0       # library default
+DEFAULT_EOS_THRESHOLD   = -4.0
 
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
@@ -116,12 +112,35 @@ _VERB_PHRASES_SORTED = sorted(_VERB_PHRASES, key=lambda s: len(s.split()), rever
 _NO_SPLIT_BEFORE = {"را","به","از","با","در","بر","برای","بدون",
                     "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان"}
 
+# Weak conjunctions that must NOT start a chunk (model often fails on these)
+_WEAK_STARTERS = {"و", "یا", "پس", "اگر", "نه", "چون", "اما",
+                  "خواه", "زیرا", "لیکن", "ولی", "بلکه"}
+
 
 # ============================================================
 #  Helpers
 # ============================================================
 def to_int16(audio: np.ndarray) -> np.ndarray:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+
+
+def _hard_split_by_words(text, max_chars):
+    """Last-resort splitter: break at word boundaries."""
+    words = text.split()
+    if not words:
+        return [text]
+    pieces, cur = [], ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= max_chars:
+            cur = cur + " " + w
+        else:
+            pieces.append(cur)
+            cur = w
+    if cur:
+        pieces.append(cur)
+    return pieces
 
 
 _DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
@@ -214,40 +233,65 @@ def split_persian_sentences(text, split_on_comma=True):
         sents = re.split(r'(?<=[.?!؛])\s+', text)
     return [s.strip() for s in sents if s.strip()]
 
-def _find_conj_indices(words):
-    idxs, i = [], 0
+
+def _find_conj_spans(words):
+    """
+    Return list of (start, end) word-index spans for each conjunction found.
+    Longest-match-first so 'از این رو' beats 'از'.
+    """
+    spans, i = [], 0
     while i < len(words):
         for c in _CONJ_SORTED:
             cw = c.split(); n = len(cw)
             if i + n <= len(words) and all(words[i+j] == cw[j] for j in range(n)):
-                idxs.append(i); break
+                spans.append((i, i + n))
+                i += n - 1
+                break
         i += 1
-    return idxs
+    return spans
+
 
 def split_sentence_at_conjunctions(sentence, max_chars):
+    """
+    Split long sentences at conjunctions.
+    IMPORTANT: each conjunction is attached to the END of the PRECEDING
+    segment, so no chunk ever starts with a bare 'و' / 'یا' / etc.
+    The model frequently returns 0 samples for such chunks.
+    """
     if len(sentence) <= max_chars:
         return [sentence]
+
     words = sentence.split()
-    ci = _find_conj_indices(words)
-    if len(ci) < MIN_CONJ_SPLITS:
+    spans = _find_conj_spans(words)
+    if len(spans) < MIN_CONJ_SPLITS:
         return [sentence]
+
     segs, prev = [], 0
-    for idx in ci:
-        if idx > prev:
-            s = " ".join(words[prev:idx]).strip()
-            if s: segs.append(s)
-        prev = idx
-    t = " ".join(words[prev:]).strip()
-    if t: segs.append(t)
-    if len(segs) <= 1: return [sentence]
+    for start, end in spans:
+        if start < prev:
+            continue
+        seg = " ".join(words[prev:end]).strip()   # conjunction attached
+        if seg:
+            segs.append(seg)
+        prev = end
+    if prev < len(words):
+        tail = " ".join(words[prev:]).strip()
+        if tail:
+            segs.append(tail)
+
+    if len(segs) <= 1:
+        return [sentence]
+
     chunks, cur = [], segs[0]
     for s in segs[1:]:
         if len(cur + " " + s) > max_chars and cur.strip():
             chunks.append(cur.strip()); cur = s
         else:
             cur = cur + " " + s
-    if cur.strip(): chunks.append(cur.strip())
+    if cur.strip():
+        chunks.append(cur.strip())
     return chunks
+
 
 def _find_verb_end_indices(words):
     ends, i = [], 0
@@ -264,6 +308,7 @@ def _find_verb_end_indices(words):
         else:
             i += 1
     return ends
+
 
 def split_sentence_at_verbs(sentence, max_chars):
     if len(sentence) <= max_chars:
@@ -296,6 +341,7 @@ def split_sentence_at_verbs(sentence, max_chars):
     if cur.strip(): chunks.append(cur.strip())
     return chunks
 
+
 def build_chunks(sentences, max_chars, min_chars, drop_letterless):
     chunks = []
     for s in sentences:
@@ -306,6 +352,7 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
             chunks.extend(c); continue
         chunks.extend(split_sentence_at_verbs(s, max_chars))
 
+    # Optional forward merging (opt-in).
     if min_chars > 0:
         merged = []
         for c in chunks:
@@ -317,6 +364,53 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
             merged[-2] = (merged[-2] + " " + merged[-1]).strip()
             merged.pop()
         chunks = merged
+
+    # Safety net: merge any chunk that STILL starts with a weak conjunction
+    # into the previous one. This shouldn't normally fire now that the
+    # conjunction splitter attaches backward, but keeps us robust.
+    merged = []
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        first_word = c.split(maxsplit=1)[0] if c else ""
+        if merged and first_word in _WEAK_STARTERS:
+            merged[-1] = (merged[-1] + " " + c).strip()
+        else:
+            merged.append(c)
+    chunks = merged
+
+    # Hard enforcement: no chunk may exceed max_chars.
+    enforced = []
+    hard_split_count = 0
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        if len(c) <= max_chars:
+            enforced.append(c)
+        else:
+            pieces = _hard_split_by_words(c, max_chars)
+            hard_split_count += 1
+            enforced.append(pieces[0])
+            enforced.extend(pieces[1:])
+    if hard_split_count:
+        print(f"→ hard-split {hard_split_count} oversized chunk(s) "
+              f"to honour max_chars={max_chars}")
+    chunks = enforced
+
+    # After the hard split, re-merge any weak-starter chunks one more time.
+    merged = []
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        first_word = c.split(maxsplit=1)[0] if c else ""
+        if merged and first_word in _WEAK_STARTERS:
+            merged[-1] = (merged[-1] + " " + c).strip()
+        else:
+            merged.append(c)
+    chunks = merged
 
     out = []
     for c in chunks:
@@ -334,7 +428,6 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
 # ============================================================
 
 def _generate_chunk(chunk_text, frames_after_eos):
-    """Yield float32 numpy frames from the model for one chunk."""
     try:
         stream = model.generate_audio_stream(
             voice_state, chunk_text, frames_after_eos=frames_after_eos
@@ -353,11 +446,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
         yield None
         return
 
-    # ------------------------------------------------------------
-    # Apply the runtime eos_threshold to the model instance.
-    # This is read inside _run_flow_lm() on every generation step,
-    # so it takes effect immediately for all chunks in this run.
-    # ------------------------------------------------------------
     model.eos_threshold = float(eos_threshold)
     print(f"→ eos_threshold set to {model.eos_threshold}")
 
@@ -379,7 +467,7 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
     pending_audio = np.zeros(0, dtype=np.float32)
     samples_since_yield = 0
-    buffer_text = None   # carries a rescued chunk forward
+    buffer_text = None
 
     def emit(force=False):
         nonlocal pending_audio, samples_since_yield
@@ -427,15 +515,41 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
             continue
 
         if produced_samples == 0:
-            print(f"  ! chunk {label} produced 0 samples (model returned no audio)")
+            print(f"  ! chunk {label} produced 0 samples")
+
             if rescue and i + 1 < len(chunks):
+                # Forward rescue: retry merged with next chunk.
                 print(f"  → rescuing: will retry merged with next chunk")
                 buffer_text = chunk_text
                 continue
-            # no rescue possible / disabled: don't add a silence gap
-            continue
 
-        # Only add inter-chunk silence when the chunk actually produced audio
+            if rescue:
+                # LAST chunk and no next chunk to merge into.
+                # Retry with a wider eos_threshold to force emission.
+                print(f"  → last chunk: retrying with eos_threshold -= 1.5")
+                orig_eos = model.eos_threshold
+                try:
+                    model.eos_threshold = orig_eos - 1.5
+                    for frame_np in _generate_chunk(chunk_text, frames_after_eos):
+                        produced_samples += len(frame_np)
+                        pending_audio = np.concatenate([pending_audio, frame_np])
+                        samples_since_yield += len(frame_np)
+                        out = emit()
+                        if out is not None:
+                            yield out
+                except Exception as e:
+                    print(f"    retry failed: {e}")
+                finally:
+                    try:
+                        model.eos_threshold = orig_eos
+                    except Exception:
+                        pass
+
+                if produced_samples == 0:
+                    print(f"  ! last chunk still empty after retry; giving up")
+                    continue
+
+        # Inter-chunk silence only when a chunk produced audio
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
         samples_since_yield += len(silence)
@@ -443,7 +557,7 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
         if out is not None:
             yield out
 
-    # Leftover rescue text at the very end
+    # Leftover rescued buffer at the very end
     if buffer_text and buffer_text.strip():
         print(f"Streaming final rescued chunk: {buffer_text[:60]}...")
         try:
@@ -514,8 +628,6 @@ with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
             out_audio = gr.Audio(label="Generated Speech",
                                  type="numpy", autoplay=True, streaming=True)
 
-    # All 8 inputs wired — this is what fixes the earlier
-    # "didn't receive enough input values (needed: 7, got: 5)" error.
     gen_event = btn.click(
         fn=synthesize_streaming,
         inputs=[txt, opt_max, opt_min, opt_comma, opt_letterless,
