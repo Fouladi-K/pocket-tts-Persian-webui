@@ -25,9 +25,10 @@ voice_state = model.get_state_for_audio_prompt("example_voice.wav")
 
 YIELD_INTERVAL_SEC = 0.5
 
+# ---- Recommended defaults (also exposed in the UI) ----
 DEFAULT_MAX_CHARS       = 100
-DEFAULT_MIN_CHARS       = 20
-DEFAULT_SPLIT_COMMA     = False
+DEFAULT_MIN_CHARS       = 30      # <-- recommended: merges tiny fragments
+DEFAULT_SPLIT_COMMA     = True
 DEFAULT_DROP_LETTERLESS = False
 DEFAULT_RESCUE          = True
 DEFAULT_FAE             = 2
@@ -112,7 +113,7 @@ _VERB_PHRASES_SORTED = sorted(_VERB_PHRASES, key=lambda s: len(s.split()), rever
 _NO_SPLIT_BEFORE = {"را","به","از","با","در","بر","برای","بدون",
                     "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان"}
 
-# Weak conjunctions that must NOT start a chunk (model often fails on these)
+# Weak conjunctions that must NOT start a chunk
 _WEAK_STARTERS = {"و", "یا", "پس", "اگر", "نه", "چون", "اما",
                   "خواه", "زیرا", "لیکن", "ولی", "بلکه"}
 
@@ -141,6 +142,38 @@ def _hard_split_by_words(text, max_chars):
     if cur:
         pieces.append(cur)
     return pieces
+
+
+def _merge_short(chunks, min_chars):
+    """Forward-absorb any chunk shorter than min_chars into its neighbor."""
+    if min_chars <= 0:
+        return chunks
+    merged = []
+    for c in chunks:
+        if merged and len(merged[-1]) < min_chars:
+            merged[-1] = (merged[-1] + " " + c).strip()
+        else:
+            merged.append(c)
+    # If the very last one is short, merge backward.
+    if len(merged) >= 2 and len(merged[-1]) < min_chars:
+        merged[-2] = (merged[-2] + " " + merged[-1]).strip()
+        merged.pop()
+    return merged
+
+
+def _pull_weak_starters_back(chunks):
+    """Merge any chunk starting with a weak conjunction into the previous one."""
+    merged = []
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        first = c.split(maxsplit=1)[0] if c else ""
+        if merged and first in _WEAK_STARTERS:
+            merged[-1] = (merged[-1] + " " + c).strip()
+        else:
+            merged.append(c)
+    return merged
 
 
 _DIACRITICS = re.compile(r'[\u064B-\u065F\u0670\u0640]')
@@ -235,10 +268,7 @@ def split_persian_sentences(text, split_on_comma=True):
 
 
 def _find_conj_spans(words):
-    """
-    Return list of (start, end) word-index spans for each conjunction found.
-    Longest-match-first so 'از این رو' beats 'از'.
-    """
+    """Return (start, end) spans for each conjunction, longest-match first."""
     spans, i = [], 0
     while i < len(words):
         for c in _CONJ_SORTED:
@@ -253,10 +283,8 @@ def _find_conj_spans(words):
 
 def split_sentence_at_conjunctions(sentence, max_chars):
     """
-    Split long sentences at conjunctions.
-    IMPORTANT: each conjunction is attached to the END of the PRECEDING
-    segment, so no chunk ever starts with a bare 'و' / 'یا' / etc.
-    The model frequently returns 0 samples for such chunks.
+    Split long sentences at conjunctions. Each conjunction is attached to
+    the END of the preceding segment, so no chunk starts with 'و' / 'یا'.
     """
     if len(sentence) <= max_chars:
         return [sentence]
@@ -270,7 +298,7 @@ def split_sentence_at_conjunctions(sentence, max_chars):
     for start, end in spans:
         if start < prev:
             continue
-        seg = " ".join(words[prev:end]).strip()   # conjunction attached
+        seg = " ".join(words[prev:end]).strip()
         if seg:
             segs.append(seg)
         prev = end
@@ -343,6 +371,7 @@ def split_sentence_at_verbs(sentence, max_chars):
 
 
 def build_chunks(sentences, max_chars, min_chars, drop_letterless):
+    # --- tier 1/2/3 chunking ---
     chunks = []
     for s in sentences:
         if len(s) <= max_chars:
@@ -352,37 +381,11 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
             chunks.extend(c); continue
         chunks.extend(split_sentence_at_verbs(s, max_chars))
 
-    # Optional forward merging (opt-in).
-    if min_chars > 0:
-        merged = []
-        for c in chunks:
-            if merged and len(merged[-1]) < min_chars:
-                merged[-1] = (merged[-1] + " " + c).strip()
-            else:
-                merged.append(c)
-        if len(merged) >= 2 and len(merged[-1]) < min_chars:
-            merged[-2] = (merged[-2] + " " + merged[-1]).strip()
-            merged.pop()
-        chunks = merged
+    # --- pipeline: merge → weak-starters → hard split → merge → weak-starters ---
+    chunks = _merge_short(chunks, min_chars)
+    chunks = _pull_weak_starters_back(chunks)
 
-    # Safety net: merge any chunk that STILL starts with a weak conjunction
-    # into the previous one. This shouldn't normally fire now that the
-    # conjunction splitter attaches backward, but keeps us robust.
-    merged = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        first_word = c.split(maxsplit=1)[0] if c else ""
-        if merged and first_word in _WEAK_STARTERS:
-            merged[-1] = (merged[-1] + " " + c).strip()
-        else:
-            merged.append(c)
-    chunks = merged
-
-    # Hard enforcement: no chunk may exceed max_chars.
-    enforced = []
-    hard_split_count = 0
+    enforced, hard_split_count = [], 0
     for c in chunks:
         c = c.strip()
         if not c:
@@ -399,19 +402,11 @@ def build_chunks(sentences, max_chars, min_chars, drop_letterless):
               f"to honour max_chars={max_chars}")
     chunks = enforced
 
-    # After the hard split, re-merge any weak-starter chunks one more time.
-    merged = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        first_word = c.split(maxsplit=1)[0] if c else ""
-        if merged and first_word in _WEAK_STARTERS:
-            merged[-1] = (merged[-1] + " " + c).strip()
-        else:
-            merged.append(c)
-    chunks = merged
+    # Second merge pass — catches short fragments created by the hard split.
+    chunks = _merge_short(chunks, min_chars)
+    chunks = _pull_weak_starters_back(chunks)
 
+    # Final filter
     out = []
     for c in chunks:
         c = c.strip()
@@ -518,14 +513,12 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
             print(f"  ! chunk {label} produced 0 samples")
 
             if rescue and i + 1 < len(chunks):
-                # Forward rescue: retry merged with next chunk.
                 print(f"  → rescuing: will retry merged with next chunk")
                 buffer_text = chunk_text
                 continue
 
             if rescue:
-                # LAST chunk and no next chunk to merge into.
-                # Retry with a wider eos_threshold to force emission.
+                # Last chunk: retry alone with a wider eos_threshold.
                 print(f"  → last chunk: retrying with eos_threshold -= 1.5")
                 orig_eos = model.eos_threshold
                 try:
@@ -549,7 +542,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                     print(f"  ! last chunk still empty after retry; giving up")
                     continue
 
-        # Inter-chunk silence only when a chunk produced audio
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
         samples_since_yield += len(silence)
@@ -557,7 +549,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
         if out is not None:
             yield out
 
-    # Leftover rescued buffer at the very end
     if buffer_text and buffer_text.strip():
         print(f"Streaming final rescued chunk: {buffer_text[:60]}...")
         try:
@@ -595,9 +586,12 @@ with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
                     minimum=20, maximum=500, step=10,
                     value=DEFAULT_MAX_CHARS)
                 opt_min = gr.Slider(
-                    label="Merge chunks shorter than (0 = off)",
+                    label="Merge chunks shorter than",
                     minimum=0, maximum=100, step=1,
-                    value=DEFAULT_MIN_CHARS)
+                    value=DEFAULT_MIN_CHARS,
+                    info="Recommended 30. Merges tiny fragments into "
+                         "their neighbor before generation; short chunks "
+                         "are the model's main failure mode.")
                 opt_letterless = gr.Checkbox(
                     label="Drop letter-less chunks (pure punctuation)",
                     value=DEFAULT_DROP_LETTERLESS)
