@@ -2,8 +2,9 @@
 
 A Gradio-based web interface for the **v2 Persian Pocket TTS model**.
 Paste Persian text, press **Generate**, and hear the audio stream back
-in real time — with intelligent three-tier chunking to keep long
-sentences stable.
+in real time — with intelligent multi-tier chunking, silent-chunk
+rescue, and live-tunable generation controls to keep long sentences
+stable.
 
 This is a subfolder of
 [pocket-tts-Persian-webui](https://github.com/Fouladi-k/pocket-tts-Persian-webui),
@@ -24,8 +25,10 @@ text directly produces silence, so this script runs a
   vs 25 per 300 in v1)
 
 The trade-off: v2 works on short phoneme sequences (target ~11 tokens,
-hard limit ~18), so this script **restores the three-tier chunking**
-from v1 to keep long sentences stable.
+hard limit ~18), so this script **restores the multi-tier chunking**
+from v1 to keep long sentences stable — plus a set of runtime controls
+and a rescue path that together eliminate the "missing word" and
+"maximum length without EOS" failures that occasionally show up on v2.
 
 ---
 
@@ -33,13 +36,27 @@ from v1 to keep long sentences stable.
 
 - **Streaming playback** — audio starts within ~1–2 seconds
 - **Stop button** — cancels generation mid-stream
-- **Threaded G2P** — phonemisation of the next sentence runs in a
-  background thread while the current sentence streams, so
-  inter-sentence gaps stay at ~250 ms instead of ~500 ms
-- **Three-tier chunking** for long sentences:
-  1. Sentence boundaries (punctuation)
+- **Multi-tier chunking** for long sentences:
+  1. Sentence boundaries (`.` `?` `!` `؛` `؟` — plus the Persian comma
+     `،` when enabled)
   2. Persian conjunctions (`و`, `اما`, `ولی`, `زیرا`, `چون`, `اگر`, …)
-  3. Persian verbs (`است`, `شد`, `می‌شود`, `کرد`, `رفت`, …) — SOV clause-end pattern
+     — attached to the *preceding* segment so no chunk starts with a
+     bare conjunction
+  3. Persian verbs (`است`, `شد`, `می‌شود`, `کرد`, `رفت`, …) — SOV
+     clause-end pattern
+  4. Word-boundary fallback — guarantees no chunk ever exceeds the
+     configured character limit
+- **Short-chunk merging** — fragments below `MIN_CHARS` are absorbed
+  into their neighbor, eliminating the model's main failure mode
+- **Silent-chunk rescue** — if a chunk raises, produces empty phonemes,
+  or yields no audio, it is re-merged with the next chunk and retried
+  instead of being silently dropped
+- **Live-tunable controls** — chunk size, merge threshold, comma
+  splitting, `frames_after_eos`, and `eos_threshold` are all adjustable
+  from the UI without restarting
+- **Crash guards** — per-chunk `try/except` and a `statistics.mean`
+  monkey-patch keep the request alive if the model misbehaves on any
+  individual chunk
 - **Runs entirely on CPU** — no GPU required
 
 ---
@@ -107,33 +124,54 @@ python farsi_webui.py
 
 **First run** downloads two models from Hugging Face:
 
-- `mehdi-hf/pocket-tts-farsi-v2` 
-- `mehdi-hf/Homo-GE2PE-Persian-HF` 
+- `mehdi-hf/pocket-tts-farsi-v2`
+- `mehdi-hf/Homo-GE2PE-Persian-HF`
 
 Subsequent runs start instantly from cache.
 
 Open your browser at `http://localhost:7862`.
 
-
 ---
 
 ## Configuration
 
-Constants at the top of `farsi_webui.py`:
+All chunking and generation parameters are exposed in the UI under two
+accordions. Nothing needs to be edited in code for everyday tuning.
+
+### Chunking options
+
+| Option | Default | Effect |
+| :--- | :--- | :--- |
+| **Split sentences on comma (،)** | `on` | When on, commas act as sentence boundaries — more, smaller chunks. Turn off for smoother prosody and fewer chunks. |
+| **Max characters per chunk** | `100` | Sentences longer than this trigger conjunction and verb splitting. A hard word-boundary fallback guarantees the limit is never exceeded. Lower = smaller chunks, more stable. |
+| **Merge chunks shorter than** | `30` | Chunks below this length are absorbed into their neighbor. `0` disables merging. Recommended 30 — short chunks are the model's main failure mode. |
+
+### Model / rescue options
+
+| Option | Default | Effect |
+| :--- | :--- | :--- |
+| **Rescue silent chunks** | `on` | If a chunk raises, produces empty phonemes, or yields no audio, merge it with the next chunk and retry. The last chunk retries alone with a wider `eos_threshold`. |
+| **frames_after_eos** | `2` | Latent frames allowed after EOS. `0` = library default. Try `2`–`4` if short chunks keep coming back empty. |
+| **eos_threshold** | `-4.0` | EOS detection threshold. Less negative (e.g. `-2.0`) = model stops sooner; useful when generation hits max length without EOS. More negative (e.g. `-6.0`) = longer output before stopping. |
+
+### Constants still set in code
 
 | Constant | Default | Effect |
 | :--- | :--- | :--- |
-| `MAX_CHARS_PER_CHUNK` | `50` | Sentences longer than this trigger tiers 2 and 3. Lower = smaller chunks, more stable. |
-| `MIN_CONJ_SPLITS` | `1` | Minimum conjunctions required before tier 2 fires. |
-| `MIN_VERB_SPLITS` | `1` | Minimum verbs required before tier 3 fires. |
+| `MIN_CONJ_SPLITS` | `1` | Minimum conjunctions required before conjunction splitting fires. |
+| `MIN_VERB_SPLITS` | `1` | Minimum verbs required before verb splitting fires. |
 | `YIELD_INTERVAL_SEC` | `0.5` | How often audio is pushed to the browser. |
 
-**Recommended tuning:**
+### Recommended tuning
 
-- **Runaway generation / garbled audio** → lower `MAX_CHARS_PER_CHUNK` to `50`
-- **Choppy playback with many small pauses** → raise `MAX_CHARS_PER_CHUNK` to `150`
-- **Prosodic "reset" at chunk boundaries is too audible** → reduce
-  inter-chunk silence from `0.25` to `0.10` seconds
+| Symptom | Try |
+| :--- | :--- |
+| **Runaway generation / garbled audio** | Lower *Max characters per chunk* to `60`–`80`, raise *eos_threshold* toward `-3.0`. |
+| **Choppy playback with many small pauses** | Raise *Max characters per chunk* to `150`, keep *Merge chunks shorter than* at `30`. |
+| **Maximum generation length reached without EOS** | Raise *eos_threshold* toward `-3.0` or `-2.0`. |
+| **Silent chunks still appearing in the log** | Keep *Rescue* on, raise *frames_after_eos* to `3`, and raise *Merge chunks shorter than* to `40`. |
+| **Missing words at the end of the paragraph** | *Rescue* should already handle this; verify it is on. If it persists, lower *Max characters per chunk* so fewer tiny fragments are produced. |
+| **Prosodic "reset" at chunk boundaries is too audible** | Reduce the inter-chunk silence from `0.25` to `0.10` seconds in `synthesize_streaming`. |
 
 ---
 
@@ -169,6 +207,21 @@ once per session.
 pip uninstall torch torchaudio -y
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 ```
+
+### Warnings in the console during generation
+
+- `Maximum generation length reached without EOS` — the model didn't
+  find a stopping point for that chunk. It is retried via the rescue
+  path. Raise *eos_threshold* if it happens often.
+- `hard-split N oversized chunk(s)` — tiers 1–3 didn't decompose a
+  chunk and the word-boundary fallback took over. Harmless; raise
+  *Max characters per chunk* if you see it frequently.
+- `! chunk N/M produced 0 samples` — that chunk yielded no audio. The
+  rescue mechanism retries it merged with the next one. Nothing is
+  dropped.
+- `! chunk N/M raised ...` — an exception inside the model for that
+  specific chunk. Also rescued. If it keeps happening, send the
+  traceback.
 
 ---
 
