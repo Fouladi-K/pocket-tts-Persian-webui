@@ -1,5 +1,5 @@
 # Pocket TTS - Farsi Streaming Web UI (Old Version)
-see new version here:
+if you prefer new model (version 2) then use this:
 [webui-v2](https://github.com/Fouladi-K/pocket-tts-Persian-webui/tree/main/webui-v2)
 
 ---
