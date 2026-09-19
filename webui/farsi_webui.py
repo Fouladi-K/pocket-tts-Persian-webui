@@ -2,10 +2,24 @@ import gradio as gr
 from pocket_tts import TTSModel
 import numpy as np
 import re
+import statistics
 import pocket_tts.default_parameters as dp
 
+# ------------------------------------------------------------------
+# Workaround for upstream bug in pocket_tts.models.tts_model:
+#   statistics.mean(steps_times) is called even when steps_times == []
+#   (happens whenever the model produces zero autoregressive steps,
+#    e.g. on very short chunks). Patch it once, globally.
+# ------------------------------------------------------------------
+_orig_mean = statistics.mean
+def _safe_mean(data, *args, **kwargs):
+    if not data:
+        return 0
+    return _orig_mean(data, *args, **kwargs)
+statistics.mean = _safe_mean
+
 # Override the global token limit before loading the model
-dp.MAX_TOKEN_PER_CHUNK = 200
+dp.MAX_TOKEN_PER_CHUNK = 50
 
 # Load the model (CPU by default)
 model = TTSModel.load_model(
@@ -25,9 +39,13 @@ YIELD_INTERVAL_SEC = 0.5
 # Tier 2: conjunction splitter — only when sentence > MAX_CHARS_PER_CHUNK
 # Tier 3: verb splitter — only when tiers 1+2 fail
 
-MAX_CHARS_PER_CHUNK = 150
+MAX_CHARS_PER_CHUNK = 50
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
+
+# Anything shorter than this (in characters) is merged into the next chunk.
+# Prevents tiny "preamble" fragments from ever reaching the model.
+MIN_CHUNK_CHARS = 1
 
 
 # ============================================================
@@ -306,8 +324,11 @@ def digits_to_words(text: str) -> str:
 def split_persian_sentences(text: str):
     text = normalize_persian_text(text)
     text = digits_to_words(text)
-    text = re.sub(r'([.?!؛،])(\S)', r'\1 \2', text)
-    sentences = re.split(r'(?<=[.?!؛،])\s+', text)
+    # NOTE: we deliberately do NOT split on the comma "،" — a comma is a
+    # pause, not a sentence boundary, and splitting on it produces tiny
+    # fragments that crash the TTS model. Only . ? ! ; trigger a split.
+    text = re.sub(r'([.?!؛])(\S)', r'\1 \2', text)
+    sentences = re.split(r'(?<=[.?!؛])\s+', text)
     return [s.strip() for s in sentences if s.strip()]
 
 
@@ -459,6 +480,28 @@ def split_sentence_at_verbs(sentence: str, max_chars: int = MAX_CHARS_PER_CHUNK)
 #  Chunk builder — tiers in order
 # ============================================================
 
+def _merge_short_chunks(chunks):
+    """
+    Merge any chunk shorter than MIN_CHUNK_CHARS into the following one.
+    Also drop chunks that have no letters at all (pure punctuation / numbers
+    that escaped normalization).
+    """
+    merged = []
+    for c in chunks:
+        c = c.strip()
+        if not c:
+            continue
+        if merged and len(merged[-1]) < MIN_CHUNK_CHARS:
+            merged[-1] = (merged[-1] + " " + c).strip()
+        else:
+            merged.append(c)
+    # If the very last one is still too short, merge it backwards.
+    if len(merged) >= 2 and len(merged[-1]) < MIN_CHUNK_CHARS:
+        merged[-2] = (merged[-2] + " " + merged[-1]).strip()
+        merged.pop()
+    return [c for c in merged if any(ch.isalpha() for ch in c)]
+
+
 def build_chunks(sentences):
     chunks = []
     for sentence in sentences:
@@ -477,7 +520,7 @@ def build_chunks(sentences):
         verb_chunks = split_sentence_at_verbs(sentence)
         chunks.extend(verb_chunks)
 
-    return chunks
+    return _merge_short_chunks(chunks)
 
 
 # ============================================================
@@ -495,31 +538,60 @@ def synthesize_streaming(text):
     sentences = split_persian_sentences(text)
     chunks = build_chunks(sentences)
 
+    if not chunks:
+        yield None
+        return
+
     pending_audio = np.zeros(0, dtype=np.float32)
     samples_since_yield = 0
 
+    def flush():
+        """Yield pending audio (if any) and reset the accumulator."""
+        nonlocal pending_audio, samples_since_yield
+        if len(pending_audio) > 0:
+            out = (sample_rate, to_int16(pending_audio))
+            pending_audio = np.zeros(0, dtype=np.float32)
+            samples_since_yield = 0
+            return out
+        return None
+
     for i, chunk_text in enumerate(chunks):
-        print(f"Streaming chunk {i+1}/{len(chunks)}: {chunk_text[:60]}...")
+        if not chunk_text.strip():
+            continue
+
+        print(f"Streaming chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars): "
+              f"{chunk_text[:60]}...")
 
         try:
-            stream = model.generate_audio_stream(
-                voice_state, chunk_text, frames_after_eos=0
-            )
-        except TypeError:
-            stream = model.generate_audio_stream(voice_state, chunk_text)
+            try:
+                stream = model.generate_audio_stream(
+                    voice_state, chunk_text, frames_after_eos=0
+                )
+            except TypeError:
+                stream = model.generate_audio_stream(voice_state, chunk_text)
 
-        for frame in stream:
-            frame_np = frame.numpy() if hasattr(frame, "numpy") else np.asarray(frame)
-            frame_np = frame_np.astype(np.float32).reshape(-1)
+            for frame in stream:
+                frame_np = (frame.numpy() if hasattr(frame, "numpy")
+                            else np.asarray(frame))
+                frame_np = frame_np.astype(np.float32).reshape(-1)
 
-            pending_audio = np.concatenate([pending_audio, frame_np])
-            samples_since_yield += len(frame_np)
+                pending_audio = np.concatenate([pending_audio, frame_np])
+                samples_since_yield += len(frame_np)
 
-            if samples_since_yield >= yield_every:
-                yield (sample_rate, to_int16(pending_audio))
-                pending_audio = np.zeros(0, dtype=np.float32)
-                samples_since_yield = 0
+                if samples_since_yield >= yield_every:
+                    yield (sample_rate, to_int16(pending_audio))
+                    pending_audio = np.zeros(0, dtype=np.float32)
+                    samples_since_yield = 0
 
+        except Exception as e:
+            # A single bad chunk should not kill the whole request.
+            print(f"  ! chunk {i+1} failed ({type(e).__name__}: {e}); skipping")
+            flushed = flush()
+            if flushed is not None:
+                yield flushed
+            continue
+
+        # small pause between chunks for natural pacing
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
 
