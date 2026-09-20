@@ -141,6 +141,12 @@ writeup, including the license checks, the ASR-based accuracy measurements, and 
 test-methodology bug we caught and fixed along the way, is in
 [`training/farsi/DATASET_SURVEY.md`](training/farsi/DATASET_SURVEY.md).
 
+## Support this work
+
+The Farsi side of this fork — the training runs, the GPU hours, the data
+cleanup — is self-funded and done in spare time. If the models saved you some,
+you can [buy me a coffee](https://buymeacoffee.com/mehdiyari).
+
 <img width="1446" height="622" alt="pocket-tts-logo-v2-transparent" src="https://github.com/user-attachments/assets/637b5ed6-831f-4023-9b4c-741be21ab238" />
 
 A lightweight text-to-speech (TTS) application designed to run efficiently on CPUs.
