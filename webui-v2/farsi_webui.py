@@ -3,6 +3,7 @@ from pocket_tts import TTSModel
 import numpy as np
 import re
 import statistics
+import os
 import torch
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 from normalize_fa import normalize_for_model
@@ -26,7 +27,9 @@ model = TTSModel.load_model(
     config="hf://mehdi-hf/pocket-tts-farsi-v2/model.yaml",
     temp=0.3,
 )
-voice_state = model.get_state_for_audio_prompt("example_voice.wav")
+
+DEFAULT_VOICE_PATH = "example_voice.wav"
+voice_state = model.get_state_for_audio_prompt(DEFAULT_VOICE_PATH)
 
 
 # ============================================================
@@ -40,16 +43,19 @@ TO_PHONEMES = str.maketrans({"/": "a", "a": "A", "@": "?", "$": "S", "c": "C"})
 
 YIELD_INTERVAL_SEC = 0.5
 
+# Anti-click fade at each chunk boundary (ms).
+FADE_MS = 12
+
 
 # ============================================================
 #  Defaults (also exposed in the UI)
 # ============================================================
-DEFAULT_MAX_CHARS       = 100
-DEFAULT_MIN_CHARS       = 30
-DEFAULT_SPLIT_COMMA     = True
-DEFAULT_RESCUE          = True
-DEFAULT_FAE             = 2
-DEFAULT_EOS_THRESHOLD   = -4.0
+DEFAULT_MAX_CHARS     = 100
+DEFAULT_MIN_CHARS     = 30
+DEFAULT_SPLIT_COMMA   = True
+DEFAULT_RESCUE        = True
+DEFAULT_FAE           = 2
+DEFAULT_EOS_THRESHOLD = -4.0
 
 MIN_CONJ_SPLITS = 1
 MIN_VERB_SPLITS = 1
@@ -59,12 +65,18 @@ MIN_VERB_SPLITS = 1
 #  Conjunctions
 # ============================================================
 _CONJUNCTIONS = [
-    "به شرط آنکه", "به‌شرط آنکه", "از آنجا که", "ازآنجا که",
-    "از این رو", "ازاین‌رو", "با این حال", "بااین‌حال",
-    "با اینکه", "بااینکه", "همین که", "همینکه",
-    "زیرا که", "زیراکه", "چون که", "چونکه",
-    "اگر چه", "اگرچه", "چنان که", "چنانکه",
-    "چنان چه", "چنانچه", "بدان که", "بدانکه",
+    "به شرط آنکه", "به‌شرط آنکه",
+    "از آنجا که", "ازآنجا که",
+    "از این رو", "ازاین‌رو",
+    "با این حال", "بااین‌حال",
+    "با اینکه", "بااینکه",
+    "همین که", "همینکه",
+    "زیرا که", "زیراکه",
+    "چون که", "چونکه",
+    "اگر چه", "اگرچه",
+    "چنان که", "چنانکه",
+    "چنان چه", "چنانچه",
+    "بدان که", "بدانکه",
     "و", "یا", "پس", "اگر", "نه", "چون", "اما",
     "خواه", "زیرا", "لیکن", "ولی", "بلکه",
 ]
@@ -72,11 +84,13 @@ _CONJ_SORTED = sorted(_CONJUNCTIONS, key=lambda s: len(s.split()), reverse=True)
 
 
 # ============================================================
-#  Verbs
+#  Verbs (SOV clause-end markers)
 # ============================================================
 _VERB_PHRASES = [
-    "شده است", "شده بود", "شده‌اند", "شده بودند", "نشده است", "نشده بود",
-    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند", "نکرده است", "نکرده بود",
+    "شده است", "شده بود", "شده‌اند", "شده بودند",
+    "نشده است", "نشده بود",
+    "کرده است", "کرده بود", "کرده‌اند", "کرده بودند",
+    "نکرده است", "نکرده بود",
     "رفته است", "رفته بود", "رفته‌اند", "رفته بودند",
     "آمده است", "آمده بود", "آمده‌اند",
     "داده است", "داده بود", "داده‌اند",
@@ -118,20 +132,26 @@ _VERB_WORDS = {
     "می‌خواهد","نمی‌خواهد","می‌خواهند","بخواهد","بخواهند",
     "توانست","نتوانست","توانسته","نتوانسته",
     "می‌تواند","نمی‌تواند","می‌توانند","نمی‌توانند","بتواند","بتوانند",
-    "رسید","نرسید","رسیده","می‌رسد","برسد","افتاد","افتاده","می‌افتد","بیفتد",
-    "نشست","نشسته","می‌نشیند","بنشیند","ایستاد","ایستاده","می‌ایستد","بایستد",
-    "برگشت","برگشته","برمی‌گردد","برگردد","مرد","مرده","می‌میرد","بمیرد",
-    "خرید","خریده","می‌خرد","بخرد","فروخت","فروخته","می‌فروشد","بفروشد",
-    "نوشت","نوشته","می‌نویسد","بنویسد","خواند","خوانده","می‌خواند","بخواند",
-    "شنید","شنیده","می‌شنود","بشنود","دانست","دانسته","می‌داند","بداند",
+    "رسید","نرسید","رسیده","می‌رسد","برسد",
+    "افتاد","افتاده","می‌افتد","بیفتد",
+    "نشست","نشسته","می‌نشیند","بنشیند",
+    "ایستاد","ایستاده","می‌ایستد","بایستد",
+    "برگشت","برگشته","برمی‌گردد","برگردد",
+    "مرد","مرده","می‌میرد","بمیرد",
+    "خرید","خریده","می‌خرد","بخرد",
+    "فروخت","فروخته","می‌فروشد","بفروشد",
+    "نوشت","نوشته","می‌نویسد","بنویسد",
+    "خواند","خوانده","می‌خواند","بخواند",
+    "شنید","شنیده","می‌شنود","بشنود",
+    "دانست","دانسته","می‌داند","بداند",
     "فهمید","فهمیده","می‌فهمد","بفهمد",
 }
 _VERB_PHRASES_SORTED = sorted(_VERB_PHRASES, key=lambda s: len(s.split()), reverse=True)
-_NO_SPLIT_BEFORE = {"را","به","از","با","در","بر","برای","بدون",
-                    "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان"}
 
-_WEAK_STARTERS = {"و", "یا", "پس", "اگر", "نه", "چون", "اما",
-                  "خواه", "زیرا", "لیکن", "ولی", "بلکه"}
+_NO_SPLIT_BEFORE = {
+    "را","به","از","با","در","بر","برای","بدون",
+    "توسط","نزد","پیش","روی","زیر","بالای","کنار","بین","میان",
+}
 
 
 # ============================================================
@@ -160,7 +180,7 @@ def to_int16(audio: np.ndarray) -> np.ndarray:
 #  Chunking helpers
 # ============================================================
 def _hard_split_by_words(text, max_chars):
-    """Last-resort word-boundary splitter."""
+    """Last-resort splitter: break at word boundaries."""
     words = text.split()
     if not words:
         return [text]
@@ -179,6 +199,7 @@ def _hard_split_by_words(text, max_chars):
 
 
 def _merge_short(chunks, min_chars):
+    """Forward-absorb any chunk shorter than min_chars into its neighbor."""
     if min_chars <= 0:
         return chunks
     merged = []
@@ -190,20 +211,6 @@ def _merge_short(chunks, min_chars):
     if len(merged) >= 2 and len(merged[-1]) < min_chars:
         merged[-2] = (merged[-2] + " " + merged[-1]).strip()
         merged.pop()
-    return merged
-
-
-def _pull_weak_starters_back(chunks):
-    merged = []
-    for c in chunks:
-        c = c.strip()
-        if not c:
-            continue
-        first = c.split(maxsplit=1)[0] if c else ""
-        if merged and first in _WEAK_STARTERS:
-            merged[-1] = (merged[-1] + " " + c).strip()
-        else:
-            merged.append(c)
     return merged
 
 
@@ -222,40 +229,39 @@ def split_persian_sentences(text, split_on_comma=True):
 
 
 # ============================================================
-#  Tier 3 — conjunction splitter (attaches conjunctions backward)
+#  Tier 3 — conjunction splitter
 # ============================================================
-def _find_conj_spans(words):
-    spans, i = [], 0
+def _find_conj_indices(words):
+    idxs, i = [], 0
     while i < len(words):
         for c in _CONJ_SORTED:
             cw = c.split(); n = len(cw)
             if i + n <= len(words) and all(words[i + j] == cw[j] for j in range(n)):
-                spans.append((i, i + n))
+                idxs.append(i)
                 i += n - 1
                 break
         i += 1
-    return spans
+    return idxs
 
 
 def split_sentence_at_conjunctions(sentence, max_chars):
     if len(sentence) <= max_chars:
         return [sentence]
     words = sentence.split()
-    spans = _find_conj_spans(words)
-    if len(spans) < MIN_CONJ_SPLITS:
+    idxs = _find_conj_indices(words)
+    if len(idxs) < MIN_CONJ_SPLITS:
         return [sentence]
     segs, prev = [], 0
-    for start, end in spans:
-        if start < prev:
+    for idx in idxs:
+        if idx <= prev:
             continue
-        seg = " ".join(words[prev:end]).strip()
+        seg = " ".join(words[prev:idx]).strip()
         if seg:
             segs.append(seg)
-        prev = end
-    if prev < len(words):
-        tail = " ".join(words[prev:]).strip()
-        if tail:
-            segs.append(tail)
+        prev = idx
+    tail = " ".join(words[prev:]).strip()
+    if tail:
+        segs.append(tail)
     if len(segs) <= 1:
         return [sentence]
     chunks, cur = [], segs[0]
@@ -324,7 +330,7 @@ def split_sentence_at_verbs(sentence, max_chars):
 
 
 # ============================================================
-#  Chunk builder — tiers + merge + hard split
+#  Chunk builder
 # ============================================================
 def build_chunks(sentences, max_chars, min_chars):
     chunks = []
@@ -336,9 +342,7 @@ def build_chunks(sentences, max_chars, min_chars):
             chunks.extend(c); continue
         chunks.extend(split_sentence_at_verbs(s, max_chars))
 
-    # merge → weak-starters → hard split → merge → weak-starters
     chunks = _merge_short(chunks, min_chars)
-    chunks = _pull_weak_starters_back(chunks)
 
     enforced, hard_split_count = [], 0
     for c in chunks:
@@ -358,21 +362,90 @@ def build_chunks(sentences, max_chars, min_chars):
     chunks = enforced
 
     chunks = _merge_short(chunks, min_chars)
-    chunks = _pull_weak_starters_back(chunks)
 
     return [c for c in chunks if c.strip()]
 
 
 # ============================================================
+#  Voice prompt management
+# ============================================================
+def set_voice(voice_file):
+    global voice_state
+    if voice_file is None:
+        return "ℹ️ فایلی انتخاب نشده — صدای پیش‌فرض فعال است."
+    try:
+        voice_state = model.get_state_for_audio_prompt(voice_file)
+        name = os.path.basename(voice_file)
+        return f"✅ صدای جدید بارگذاری شد: **{name}**"
+    except Exception as e:
+        return f"❌ خطا در بارگذاری صدا: {e}"
+
+
+def reset_voice():
+    global voice_state
+    try:
+        voice_state = model.get_state_for_audio_prompt(DEFAULT_VOICE_PATH)
+        return f"✅ بازگشت به صدای پیش‌فرض ({DEFAULT_VOICE_PATH})"
+    except Exception as e:
+        return f"❌ خطا: {e}"
+
+
+# ============================================================
 #  Streaming synthesis
 # ============================================================
+def _generate_phonemes(phonemes, frames_after_eos):
+    """Yield float32 numpy frames for one phoneme sequence."""
+    try:
+        stream = model.generate_audio_stream(
+            voice_state, phonemes, frames_after_eos=frames_after_eos
+        )
+    except TypeError:
+        stream = model.generate_audio_stream(voice_state, phonemes)
+    for frame in stream:
+        arr = frame.numpy() if hasattr(frame, "numpy") else np.asarray(frame)
+        yield arr.astype(np.float32).reshape(-1)
+
+
+def _stream_phonemes_faded(phonemes, frames_after_eos,
+                           fade_len, fade_in_ramp, fade_out_ramp):
+    """
+    Like _generate_phonemes, but applies a short linear fade to the
+    start and end of the generated audio to suppress the click that
+    appears at chunk boundaries when streamed segments are concatenated.
+    """
+    tail = np.zeros(0, dtype=np.float32)
+    fade_in_remaining = fade_len
+
+    for frame_np in _generate_phonemes(phonemes, frames_after_eos):
+        if fade_in_remaining > 0:
+            n = min(fade_in_remaining, len(frame_np))
+            if n > 0:
+                start = fade_len - fade_in_remaining
+                frame_np = frame_np.copy()
+                frame_np[:n] *= fade_in_ramp[start:start + n]
+                fade_in_remaining -= n
+
+        data = (np.concatenate([tail, frame_np])
+                if len(tail) else frame_np)
+        if len(data) > fade_len:
+            yield data[:-fade_len]
+            tail = data[-fade_len:].copy()
+        else:
+            tail = data
+
+    if len(tail) > 0:
+        n = min(fade_len, len(tail))
+        tail = tail.copy()
+        tail[-n:] *= fade_out_ramp[-n:]
+        yield tail
+
+
 def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                          rescue, frames_after_eos, eos_threshold):
     if not text or not text.strip():
         yield None
         return
 
-    # apply eos_threshold on the model instance (read per-step)
     try:
         model.eos_threshold = float(eos_threshold)
         print(f"→ eos_threshold set to {model.eos_threshold}")
@@ -381,6 +454,11 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
     sample_rate = model.sample_rate
     yield_every = int(sample_rate * YIELD_INTERVAL_SEC)
+
+    # Anti-click fades at chunk boundaries
+    fade_len = max(1, int(sample_rate * FADE_MS / 1000))
+    fade_in_ramp = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+    fade_out_ramp = fade_in_ramp[::-1].copy()
 
     sentences = split_persian_sentences(text, split_on_comma=split_on_comma)
     chunks = build_chunks(sentences, int(max_chars), int(min_chars))
@@ -405,14 +483,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                 return out
         return None
 
-    def generate_for(phonemes, fae):
-        try:
-            return model.generate_audio_stream(
-                voice_state, phonemes, frames_after_eos=fae
-            )
-        except TypeError:
-            return model.generate_audio_stream(voice_state, phonemes)
-
     for i, raw_text in enumerate(chunks):
         if not raw_text.strip():
             continue
@@ -425,7 +495,7 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
             full_text = raw_text
             label = f"{i+1}/{len(chunks)}"
 
-        # G2P (synchronous — needed for rescue correctness)
+        # G2P
         try:
             phonemes = phonemise(full_text)
         except Exception as e:
@@ -445,13 +515,13 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
         produced_samples = 0
         try:
-            for frame in generate_for(phonemes, frames_after_eos):
-                frame_np = (frame.numpy() if hasattr(frame, "numpy")
-                            else np.asarray(frame))
-                frame_np = frame_np.astype(np.float32).reshape(-1)
-                produced_samples += len(frame_np)
-                pending_audio = np.concatenate([pending_audio, frame_np])
-                samples_since_yield += len(frame_np)
+            for audio_part in _stream_phonemes_faded(
+                phonemes, frames_after_eos,
+                fade_len, fade_in_ramp, fade_out_ramp,
+            ):
+                produced_samples += len(audio_part)
+                pending_audio = np.concatenate([pending_audio, audio_part])
+                samples_since_yield += len(audio_part)
                 out = emit()
                 if out is not None:
                     yield out
@@ -468,26 +538,23 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
         if produced_samples == 0:
             print(f"  ! chunk {label} produced 0 samples")
-
             if rescue and i + 1 < len(chunks):
                 print(f"  → rescuing: will retry merged with next chunk")
                 buffer_text = full_text
                 continue
-
             if rescue:
-                # Last chunk — retry alone with a wider eos_threshold
                 print(f"  → last chunk: retrying with eos_threshold -= 1.5")
                 orig_eos = getattr(model, "eos_threshold", None)
                 try:
                     if orig_eos is not None:
                         model.eos_threshold = orig_eos - 1.5
-                    for frame in generate_for(phonemes, frames_after_eos):
-                        frame_np = (frame.numpy() if hasattr(frame, "numpy")
-                                    else np.asarray(frame))
-                        frame_np = frame_np.astype(np.float32).reshape(-1)
-                        produced_samples += len(frame_np)
-                        pending_audio = np.concatenate([pending_audio, frame_np])
-                        samples_since_yield += len(frame_np)
+                    for audio_part in _stream_phonemes_faded(
+                        phonemes, frames_after_eos,
+                        fade_len, fade_in_ramp, fade_out_ramp,
+                    ):
+                        produced_samples += len(audio_part)
+                        pending_audio = np.concatenate([pending_audio, audio_part])
+                        samples_since_yield += len(audio_part)
                         out = emit()
                         if out is not None:
                             yield out
@@ -499,12 +566,10 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                             model.eos_threshold = orig_eos
                         except Exception:
                             pass
-
                 if produced_samples == 0:
                     print(f"  ! last chunk still empty after retry; giving up")
                     continue
 
-        # Inter-chunk pause only if we produced audio
         silence = np.zeros(int(sample_rate * 0.25), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
         samples_since_yield += len(silence)
@@ -512,18 +577,17 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
         if out is not None:
             yield out
 
-    # Leftover rescued buffer
     if buffer_text and buffer_text.strip():
         print(f"Streaming final rescued chunk: {buffer_text[:60]}...")
         try:
             phonemes = phonemise(buffer_text)
             if phonemes.strip():
-                for frame in generate_for(phonemes, frames_after_eos):
-                    frame_np = (frame.numpy() if hasattr(frame, "numpy")
-                                else np.asarray(frame))
-                    frame_np = frame_np.astype(np.float32).reshape(-1)
-                    pending_audio = np.concatenate([pending_audio, frame_np])
-                    samples_since_yield += len(frame_np)
+                for audio_part in _stream_phonemes_faded(
+                    phonemes, frames_after_eos,
+                    fade_len, fade_in_ramp, fade_out_ramp,
+                ):
+                    pending_audio = np.concatenate([pending_audio, audio_part])
+                    samples_since_yield += len(audio_part)
                     out = emit()
                     if out is not None:
                         yield out
@@ -535,68 +599,234 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
 
 # ============================================================
+#  Theme + CSS (RTL + Persian font + compact audio player)
+# ============================================================
+theme = gr.themes.Soft(
+    primary_hue=gr.themes.colors.indigo,
+    secondary_hue=gr.themes.colors.slate,
+    neutral_hue=gr.themes.colors.slate,
+    font=[gr.themes.GoogleFont("Vazirmatn"), "Tahoma", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
+)
+
+CSS = """
+/* Global RTL */
+.gradio-container {
+    direction: rtl !important;
+    text-align: right !important;
+}
+.gradio-container .prose,
+.gradio-container label,
+.gradio-container button,
+.gradio-container summary,
+.gradio-container .gr-check-radio label,
+.gradio-container .gr-checkbox label {
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+}
+.gradio-container textarea,
+.gradio-container input[type="text"],
+.gradio-container input[type="number"],
+.gradio-container input[type="search"] {
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+    font-size: 15px !important;
+    line-height: 1.9 !important;
+}
+.gradio-container input[type="range"] {
+    direction: ltr !important;
+}
+.gradio-container h1, .gradio-container h2, .gradio-container h3 {
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+    font-weight: 700 !important;
+}
+#gen-btn {
+    background: linear-gradient(135deg, #4f46e5, #6366f1) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+#gen-btn:hover { filter: brightness(1.1); }
+#stop-btn {
+    background: linear-gradient(135deg, #dc2626, #ef4444) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+.gradio-container details > summary {
+    font-weight: 600 !important;
+    padding: 10px 12px !important;
+    border-radius: 8px !important;
+    background: rgba(99, 102, 241, 0.08) !important;
+    cursor: pointer;
+}
+
+/* Compact output audio player — prevent the huge empty-state icon
+   from pushing controls out of view. */
+#out-audio {
+    min-height: 120px !important;
+    max-height: 200px !important;
+    overflow: hidden !important;
+}
+#out-audio svg {
+    max-height: 64px !important;
+    max-width: 64px !important;
+}
+#out-audio .audio-player,
+#out-audio .waveform-container,
+#out-audio > div {
+    max-height: 180px !important;
+    overflow: hidden !important;
+}
+#out-audio .controls,
+#out-audio .play-pause,
+#out-audio audio {
+    max-height: 48px !important;
+}
+"""
+
+
+# ============================================================
 #  UI
 # ============================================================
-with gr.Blocks(title="Pocket TTS - Farsi v2 (Chunked)") as iface:
+with gr.Blocks(title="Pocket TTS v2 — فارسی (استریم)") as iface:
+
     gr.Markdown(
-        "## Pocket TTS - Farsi v2 (Persian) — Chunked Streaming\n"
-        "Paste Persian text and press **Generate**. Text is split into "
-        "chunks, phonemised, then synthesised. Press **Stop** to cancel."
+        """
+        # 🎙️ شبیه‌ساز گفتار فارسی — Pocket TTS v2
+        متن فارسی خود را در کادر زیر وارد کنید و دکمهٔ **تولید** را بزنید.
+        متن ابتدا به واج تبدیل می‌شود و سپس به‌صورت **استریم** پخش می‌گردد.
+        """
     )
+
     with gr.Row():
-        with gr.Column():
+        # ---------- ستون تنظیمات ----------
+        with gr.Column(scale=5):
+            # دکمه‌ها بالای کادر متن، همیشه در دید
+            with gr.Row():
+                btn = gr.Button("🎧 تولید", variant="primary",
+                                elem_id="gen-btn", scale=2)
+                stop_btn = gr.Button("⏹ توقف", variant="stop",
+                                     elem_id="stop-btn", scale=1)
+                clear = gr.ClearButton([], value="🧹 پاک کردن", scale=1)
+
             txt = gr.Textbox(
-                label="Persian Text",
+                label="متن فارسی",
                 lines=10,
-                placeholder="متن طولانی خود را اینجا وارد کنید..."
+                placeholder="متن طولانی خود را اینجا وارد کنید...",
+                rtl=True,
             )
-            with gr.Accordion("Chunking options", open=False):
+            clear.click(fn=lambda: "", outputs=txt, queue=False)
+
+            with gr.Accordion("⚙️ تنظیمات قطعه‌بندی", open=False):
                 opt_comma = gr.Checkbox(
-                    label="Split sentences on comma (،)",
-                    value=DEFAULT_SPLIT_COMMA)
+                    label="تقسیم جمله‌ها روی ویرگول (،)",
+                    value=DEFAULT_SPLIT_COMMA,
+                    info="روشن = قطعه‌های کوچک‌تر و شروع سریع‌تر پخش. "
+                         "خاموش = قطعه‌های بزرگ‌تر و روان‌تر.",
+                )
                 opt_max = gr.Slider(
-                    label="Max characters per chunk",
+                    label="حداکثر کاراکتر در هر قطعه",
                     minimum=20, maximum=500, step=10,
-                    value=DEFAULT_MAX_CHARS)
+                    value=DEFAULT_MAX_CHARS,
+                    info="جمله‌های طولانی‌تر از این مقدار، روی حروف ربط و "
+                         "افعال تقسیم می‌شوند. اگر به قطع طولانی برخوردی، "
+                         "کاهش بده.",
+                )
                 opt_min = gr.Slider(
-                    label="Merge chunks shorter than",
+                    label="ادغام قطعه‌های کوتاه‌تر از",
                     minimum=0, maximum=100, step=1,
                     value=DEFAULT_MIN_CHARS,
-                    info="Recommended 30. Merges tiny fragments into "
-                         "their neighbor before phonemisation.")
-            with gr.Accordion("Model / rescue options", open=False):
+                    info="پیشنهاد: ۳۰. قطعه‌های خیلی کوچک را به همسایه‌شان "
+                         "می‌چسباند و از خطاهای مدل جلوگیری می‌کند.",
+                )
+
+            with gr.Accordion("🛠️ تنظیمات مدل و بازیابی", open=False):
                 opt_rescue = gr.Checkbox(
-                    label="Rescue silent chunks (retry merged with next chunk)",
-                    value=DEFAULT_RESCUE)
+                    label="بازیابی قطعه‌های بی‌صدا (تلاش مجدد با قطعهٔ بعدی)",
+                    value=DEFAULT_RESCUE,
+                    info="اگر قطعه‌ای صدا تولید نکند، به‌جای حذف، با قطعهٔ "
+                         "بعدی ادغام و دوباره تلاش می‌شود.",
+                )
                 opt_fae = gr.Slider(
                     label="frames_after_eos",
                     minimum=0, maximum=16, step=1,
                     value=DEFAULT_FAE,
-                    info="Latent frames to allow after EOS. Try 2–4 if "
-                         "short chunks come back empty.")
+                    info="تعداد فریم‌های مجاز پس از پایان جمله. اگر قطعه‌های "
+                         "کوتاه خالی برمی‌گردند، مقدار ۲ تا ۴ را امتحان کنید.",
+                )
                 opt_eos = gr.Slider(
-                    label="eos_threshold (less negative = stops sooner)",
+                    label="eos_threshold (عدد بزرگ‌تر = توقف زودتر)",
                     minimum=-8.0, maximum=-1.0, step=0.5,
                     value=DEFAULT_EOS_THRESHOLD,
-                    info="Raise toward -2.0 if generation hits max length "
-                         "without EOS. Lower if speech cuts off too early.")
-            with gr.Row():
-                btn = gr.Button("Generate", variant="primary")
-                stop_btn = gr.Button("Stop", variant="stop")
-            clear = gr.ClearButton([txt], value="Clear Text")
-        with gr.Column():
+                    info="اگر خطای «به حداکثر طول رسید بدون EOS» زیاد دیده "
+                         "می‌شود، به سمت ‎-۳٫۰ یا ‎-۲٫۰ بیایید.",
+                )
+
+            with gr.Accordion("🎚️ تنظیمات صدا", open=False):
+                opt_voice = gr.Audio(
+                    label="فایل صدای مرجع (اختیاری، حداکثر ۵ ثانیه)",
+                    sources=["upload"],
+                    type="filepath",
+                )
+                voice_status = gr.Markdown(
+                    f"ℹ️ صدای پیش‌فرض فعال است: `{DEFAULT_VOICE_PATH}`"
+                )
+                with gr.Row():
+                    btn_voice_set = gr.Button("بارگذاری صدای جدید", size="sm")
+                    btn_voice_reset = gr.Button("بازگشت به پیش‌فرض", size="sm")
+
+        # ---------- ستون خروجی ----------
+        with gr.Column(scale=5):
+            gr.Markdown("### صدای تولیدشده")
             out_audio = gr.Audio(
-                label="Generated Speech",
+                label="",
                 type="numpy",
                 autoplay=True,
                 streaming=True,
+                elem_id="out-audio",
             )
+            gr.Markdown(
+                """
+                <div style="opacity:.7;font-size:13px;line-height:1.8;
+                            margin-top:8px;">
+                💡 نکته‌ها:
+                <ul style="margin-top:4px;padding-inline-start:20px;">
+                    <li>متن ابتدا به واج تبدیل و سپس به‌صورت استریم پخش
+                        می‌شود.</li>
+                    <li>برای دانلود فایل WAV، از دکمهٔ دانلود در پخش‌کنندهٔ
+                        صدا استفاده کنید.</li>
+                </ul>
+                </div>
+                """
+            )
+
+    # ---------- رویدادها ----------
+    btn_voice_set.click(
+        fn=set_voice,
+        inputs=opt_voice,
+        outputs=voice_status,
+    )
+    btn_voice_reset.click(
+        fn=reset_voice,
+        inputs=None,
+        outputs=voice_status,
+    )
 
     gen_event = btn.click(
         fn=synthesize_streaming,
-        inputs=[txt, opt_max, opt_min, opt_comma, opt_rescue, opt_fae, opt_eos],
+        inputs=[txt, opt_max, opt_min, opt_comma,
+                opt_rescue, opt_fae, opt_eos],
         outputs=out_audio,
     )
     stop_btn.click(fn=None, inputs=None, outputs=None, cancels=[gen_event])
 
-iface.queue().launch(server_name="127.0.0.1", server_port=7862)
+
+iface.queue().launch(
+    server_name="127.0.0.1",
+    server_port=7862,
+    theme=theme,
+    css=CSS,
+)
