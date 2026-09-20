@@ -3,6 +3,7 @@ from pocket_tts import TTSModel
 import numpy as np
 import re
 import statistics
+import os
 import pocket_tts.default_parameters as dp
 
 
@@ -26,13 +27,20 @@ model = TTSModel.load_model(
     config="hf://mehdi-hf/pocket-tts-farsi/farsi.yaml",
     temp=0.3,
 )
-voice_state = model.get_state_for_audio_prompt("example_voice.wav")
+
+DEFAULT_VOICE_PATH = "example_voice.wav"
+voice_state = model.get_state_for_audio_prompt(DEFAULT_VOICE_PATH)
 
 YIELD_INTERVAL_SEC = 0.5
 
+# Length of the anti-click fade at each chunk boundary (ms).
+# Short enough to be inaudible, long enough to smooth the
+# amplitude step that causes the click when two chunks join.
+FADE_MS = 12
+
 
 # ============================================================
-#  Defaults (also exposed in the UI)
+#  Defaults
 # ============================================================
 DEFAULT_MAX_CHARS     = 100
 DEFAULT_MIN_CHARS     = 30
@@ -294,7 +302,6 @@ def split_persian_sentences(text, split_on_comma=True):
 #  Tier 3 — conjunction splitter
 # ============================================================
 def _find_conj_indices(words):
-    """Return word-index positions where a conjunction starts."""
     idxs, i = [], 0
     while i < len(words):
         for c in _CONJ_SORTED:
@@ -308,15 +315,12 @@ def _find_conj_indices(words):
 
 
 def split_sentence_at_conjunctions(sentence, max_chars):
-    """Split long sentences at conjunctions. Conjunctions start the new chunk."""
     if len(sentence) <= max_chars:
         return [sentence]
-
     words = sentence.split()
     idxs = _find_conj_indices(words)
     if len(idxs) < MIN_CONJ_SPLITS:
         return [sentence]
-
     segs, prev = [], 0
     for idx in idxs:
         if idx <= prev:
@@ -328,10 +332,8 @@ def split_sentence_at_conjunctions(sentence, max_chars):
     tail = " ".join(words[prev:]).strip()
     if tail:
         segs.append(tail)
-
     if len(segs) <= 1:
         return [sentence]
-
     chunks, cur = [], segs[0]
     for s in segs[1:]:
         if len(cur + " " + s) > max_chars and cur.strip():
@@ -410,10 +412,8 @@ def build_chunks(sentences, max_chars, min_chars):
             chunks.extend(c); continue
         chunks.extend(split_sentence_at_verbs(s, max_chars))
 
-    # Merge pass #1
     chunks = _merge_short(chunks, min_chars)
 
-    # Hard split
     enforced, hard_split_count = [], 0
     for c in chunks:
         c = c.strip()
@@ -431,10 +431,33 @@ def build_chunks(sentences, max_chars, min_chars):
               f"to honour max_chars={max_chars}")
     chunks = enforced
 
-    # Merge pass #2 (post hard-split)
     chunks = _merge_short(chunks, min_chars)
 
     return [c for c in chunks if c.strip()]
+
+
+# ============================================================
+#  Voice prompt management
+# ============================================================
+def set_voice(voice_file):
+    global voice_state
+    if voice_file is None:
+        return "ℹ️ فایلی انتخاب نشده — صدای پیش‌فرض فعال است."
+    try:
+        voice_state = model.get_state_for_audio_prompt(voice_file)
+        name = os.path.basename(voice_file)
+        return f"✅ صدای جدید بارگذاری شد: **{name}**"
+    except Exception as e:
+        return f"❌ خطا در بارگذاری صدا: {e}"
+
+
+def reset_voice():
+    global voice_state
+    try:
+        voice_state = model.get_state_for_audio_prompt(DEFAULT_VOICE_PATH)
+        return f"✅ بازگشت به صدای پیش‌فرض ({DEFAULT_VOICE_PATH})"
+    except Exception as e:
+        return f"❌ خطا: {e}"
 
 
 # ============================================================
@@ -452,6 +475,47 @@ def _generate_chunk(chunk_text, frames_after_eos):
         yield arr.astype(np.float32).reshape(-1)
 
 
+def _stream_chunk_faded(chunk_text, frames_after_eos,
+                        fade_len, fade_in_ramp, fade_out_ramp):
+    """
+    Yield float32 audio frames for a single chunk, with a short linear
+    fade applied to the very start and the very end of the chunk.
+
+    Implementation: the last `fade_len` samples of the chunk are held
+    back until we know the chunk has ended, then faded out and emitted.
+    This removes the amplitude step that causes a click when this chunk
+    joins the silence that follows it. Latency added: ~12 ms, inaudible.
+    """
+    tail = np.zeros(0, dtype=np.float32)
+    fade_in_remaining = fade_len
+
+    for frame_np in _generate_chunk(chunk_text, frames_after_eos):
+        # ---- fade-in (may span multiple frames) ----
+        if fade_in_remaining > 0:
+            n = min(fade_in_remaining, len(frame_np))
+            if n > 0:
+                start = fade_len - fade_in_remaining
+                frame_np = frame_np.copy()
+                frame_np[:n] *= fade_in_ramp[start:start + n]
+                fade_in_remaining -= n
+
+        # ---- hold back the last `fade_len` samples ----
+        data = (np.concatenate([tail, frame_np])
+                if len(tail) else frame_np)
+        if len(data) > fade_len:
+            yield data[:-fade_len]
+            tail = data[-fade_len:].copy()
+        else:
+            tail = data
+
+    # ---- fade-out of the held-back tail ----
+    if len(tail) > 0:
+        n = min(fade_len, len(tail))
+        tail = tail.copy()
+        tail[-n:] *= fade_out_ramp[-n:]
+        yield tail
+
+
 def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                          rescue, frames_after_eos, eos_threshold):
     if not text or not text.strip():
@@ -463,6 +527,11 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
     sample_rate = model.sample_rate
     yield_every = int(sample_rate * YIELD_INTERVAL_SEC)
+
+    # Anti-click fades at chunk boundaries
+    fade_len = max(1, int(sample_rate * FADE_MS / 1000))
+    fade_in_ramp = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+    fade_out_ramp = fade_in_ramp[::-1].copy()
 
     sentences = split_persian_sentences(text, split_on_comma=split_on_comma)
     chunks = build_chunks(sentences, int(max_chars), int(min_chars))
@@ -505,10 +574,13 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
         produced_samples = 0
         try:
-            for frame_np in _generate_chunk(chunk_text, frames_after_eos):
-                produced_samples += len(frame_np)
-                pending_audio = np.concatenate([pending_audio, frame_np])
-                samples_since_yield += len(frame_np)
+            for audio_part in _stream_chunk_faded(
+                chunk_text, frames_after_eos,
+                fade_len, fade_in_ramp, fade_out_ramp,
+            ):
+                produced_samples += len(audio_part)
+                pending_audio = np.concatenate([pending_audio, audio_part])
+                samples_since_yield += len(audio_part)
                 out = emit()
                 if out is not None:
                     yield out
@@ -534,10 +606,13 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                 orig_eos = model.eos_threshold
                 try:
                     model.eos_threshold = orig_eos - 1.5
-                    for frame_np in _generate_chunk(chunk_text, frames_after_eos):
-                        produced_samples += len(frame_np)
-                        pending_audio = np.concatenate([pending_audio, frame_np])
-                        samples_since_yield += len(frame_np)
+                    for audio_part in _stream_chunk_faded(
+                        chunk_text, frames_after_eos,
+                        fade_len, fade_in_ramp, fade_out_ramp,
+                    ):
+                        produced_samples += len(audio_part)
+                        pending_audio = np.concatenate([pending_audio, audio_part])
+                        samples_since_yield += len(audio_part)
                         out = emit()
                         if out is not None:
                             yield out
@@ -552,6 +627,7 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                     print(f"  ! last chunk still empty after retry; giving up")
                     continue
 
+        # Short inter-chunk silence to keep prosody natural
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
         samples_since_yield += len(silence)
@@ -562,9 +638,12 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
     if buffer_text and buffer_text.strip():
         print(f"Streaming final rescued chunk: {buffer_text[:60]}...")
         try:
-            for frame_np in _generate_chunk(buffer_text, frames_after_eos):
-                pending_audio = np.concatenate([pending_audio, frame_np])
-                samples_since_yield += len(frame_np)
+            for audio_part in _stream_chunk_faded(
+                buffer_text, frames_after_eos,
+                fade_len, fade_in_ramp, fade_out_ramp,
+            ):
+                pending_audio = np.concatenate([pending_audio, audio_part])
+                samples_since_yield += len(audio_part)
                 out = emit()
                 if out is not None:
                     yield out
@@ -576,61 +655,111 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
 
 
 # ============================================================
+#  Theme + CSS
+# ============================================================
+theme = gr.themes.Soft(
+    primary_hue=gr.themes.colors.indigo,
+    secondary_hue=gr.themes.colors.slate,
+    neutral_hue=gr.themes.colors.slate,
+    font=[gr.themes.GoogleFont("Vazirmatn"), "Tahoma", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
+)
+
+CSS = """
+/* Global RTL */
+.gradio-container {
+    direction: rtl !important;
+    text-align: right !important;
+}
+.gradio-container .prose,
+.gradio-container label,
+.gradio-container button,
+.gradio-container summary,
+.gradio-container .gr-check-radio label,
+.gradio-container .gr-checkbox label {
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+}
+.gradio-container textarea,
+.gradio-container input[type="text"],
+.gradio-container input[type="number"],
+.gradio-container input[type="search"] {
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+    font-size: 15px !important;
+    line-height: 1.9 !important;
+}
+.gradio-container input[type="range"] {
+    direction: ltr !important;
+}
+.gradio-container h1, .gradio-container h2, .gradio-container h3 {
+    font-family: 'Vazirmatn', Tahoma, sans-serif !important;
+    font-weight: 700 !important;
+}
+#gen-btn {
+    background: linear-gradient(135deg, #4f46e5, #6366f1) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+#gen-btn:hover { filter: brightness(1.1); }
+#stop-btn {
+    background: linear-gradient(135deg, #dc2626, #ef4444) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+}
+.gradio-container details > summary {
+    font-weight: 600 !important;
+    padding: 10px 12px !important;
+    border-radius: 8px !important;
+    background: rgba(99, 102, 241, 0.08) !important;
+    cursor: pointer;
+}
+
+/* Compact output audio player — prevent the huge empty-state icon
+   from pushing controls out of view. */
+#out-audio {
+    min-height: 120px !important;
+    max-height: 200px !important;
+    overflow: hidden !important;
+}
+#out-audio svg {
+    max-height: 64px !important;
+    max-width: 64px !important;
+}
+#out-audio .audio-player,
+#out-audio .waveform-container,
+#out-audio > div {
+    max-height: 180px !important;
+    overflow: hidden !important;
+}
+#out-audio .controls,
+#out-audio .play-pause,
+#out-audio audio {
+    max-height: 48px !important;
+}
+"""
+
+
+# ============================================================
 #  UI
 # ============================================================
-with gr.Blocks(title="Pocket TTS - Farsi (Streaming)") as iface:
+with gr.Blocks(title="Pocket TTS — فارسی (استریم)") as iface:
+
     gr.Markdown(
-        "## Pocket TTS - Farsi (Persian) — Streaming\n"
-        "Paste Persian text and press **Generate**."
+        """
+        # 🎙️ شبیه‌ساز گفتار فارسی — Pocket TTS
+        متن فارسی خود را در کادر زیر وارد کنید و دکمهٔ **تولید** را بزنید.
+        """
     )
+
     with gr.Row():
-        with gr.Column():
-            txt = gr.Textbox(label="Persian Text", lines=10,
-                             placeholder="متن طولانی خود را اینجا وارد کنید...")
-            with gr.Accordion("Chunking options", open=False):
-                opt_comma = gr.Checkbox(
-                    label="Split sentences on comma (،)",
-                    value=DEFAULT_SPLIT_COMMA)
-                opt_max = gr.Slider(
-                    label="Max characters per chunk",
-                    minimum=20, maximum=500, step=10,
-                    value=DEFAULT_MAX_CHARS)
-                opt_min = gr.Slider(
-                    label="Merge chunks shorter than",
-                    minimum=0, maximum=100, step=1,
-                    value=DEFAULT_MIN_CHARS,
-                    info="Recommended 30. Merges tiny fragments into their "
-                         "neighbor before generation.")
-            with gr.Accordion("Model / rescue options", open=False):
-                opt_rescue = gr.Checkbox(
-                    label="Rescue silent chunks (retry merged with next chunk)",
-                    value=DEFAULT_RESCUE)
-                opt_fae = gr.Slider(
-                    label="frames_after_eos",
-                    minimum=0, maximum=16, step=1,
-                    value=DEFAULT_FAE,
-                    info="Latent frames allowed after EOS. Try 2–4 if short "
-                         "chunks come back empty.")
-                opt_eos = gr.Slider(
-                    label="eos_threshold (less negative = stops sooner)",
-                    minimum=-8.0, maximum=-1.0, step=0.5,
-                    value=DEFAULT_EOS_THRESHOLD,
-                    info="Raise toward -2.0 if generation hits max length "
-                         "without EOS.")
+        with gr.Column(scale=5):
             with gr.Row():
-                btn = gr.Button("Generate", variant="primary")
-                stop_btn = gr.Button("Stop", variant="stop")
-            clear = gr.ClearButton([txt], value="Clear Text")
-        with gr.Column():
-            out_audio = gr.Audio(label="Generated Speech",
-                                 type="numpy", autoplay=True, streaming=True)
-
-    gen_event = btn.click(
-        fn=synthesize_streaming,
-        inputs=[txt, opt_max, opt_min, opt_comma,
-                opt_rescue, opt_fae, opt_eos],
-        outputs=out_audio,
-    )
-    stop_btn.click(fn=None, inputs=None, outputs=None, cancels=[gen_event])
-
-iface.queue().launch(server_name="0.0.0.0", server_port=7860)
+                btn = gr.Button("🎧 تولید", variant="primary",
+                                elem_id="gen-btn", scale=2)
+                stop_btn = gr.Button("⏹ توقف", variant="stop",
+                                     elem_id="stop
