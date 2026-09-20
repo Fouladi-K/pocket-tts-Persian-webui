@@ -1,5 +1,7 @@
 # Pocket TTS
 
+<a href="https://buymeacoffee.com/mehdiyari"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=mehdiyari&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" height="38" alt="Buy me a coffee" /></a>
+
 *[فارسی / Persian README](README.fa.md)*
 
 > [!TIP]
@@ -140,12 +142,6 @@ noisier than what's already in the model, and one looks genuinely promising. Ful
 writeup, including the license checks, the ASR-based accuracy measurements, and a real
 test-methodology bug we caught and fixed along the way, is in
 [`training/farsi/DATASET_SURVEY.md`](training/farsi/DATASET_SURVEY.md).
-
-## Support this work
-
-The Farsi side of this fork — the training runs, the GPU hours, the data
-cleanup — is self-funded and done in spare time. If the models saved you some,
-you can [buy me a coffee](https://buymeacoffee.com/mehdiyari).
 
 <img width="1446" height="622" alt="pocket-tts-logo-v2-transparent" src="https://github.com/user-attachments/assets/637b5ed6-831f-4023-9b4c-741be21ab238" />
 
