@@ -2,6 +2,8 @@
 
 # پاکت‌تی‌تی‌اس — فارسی
 
+<a href="https://buymeacoffee.com/mehdiyari"><img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=mehdiyari&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" height="38" alt="Buy me a coffee" /></a>
+
 *[English README](README.md)*
 
 مدلی سبک برای **تبدیل متن فارسی به گفتار** که روی **پردازندهٔ معمولی (CPU)** اجرا
