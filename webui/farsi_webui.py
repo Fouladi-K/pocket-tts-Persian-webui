@@ -33,9 +33,6 @@ voice_state = model.get_state_for_audio_prompt(DEFAULT_VOICE_PATH)
 
 YIELD_INTERVAL_SEC = 0.5
 
-# Length of the anti-click fade at each chunk boundary (ms).
-# Short enough to be inaudible, long enough to smooth the
-# amplitude step that causes the click when two chunks join.
 FADE_MS = 12
 
 
@@ -477,20 +474,10 @@ def _generate_chunk(chunk_text, frames_after_eos):
 
 def _stream_chunk_faded(chunk_text, frames_after_eos,
                         fade_len, fade_in_ramp, fade_out_ramp):
-    """
-    Yield float32 audio frames for a single chunk, with a short linear
-    fade applied to the very start and the very end of the chunk.
-
-    Implementation: the last `fade_len` samples of the chunk are held
-    back until we know the chunk has ended, then faded out and emitted.
-    This removes the amplitude step that causes a click when this chunk
-    joins the silence that follows it. Latency added: ~12 ms, inaudible.
-    """
     tail = np.zeros(0, dtype=np.float32)
     fade_in_remaining = fade_len
 
     for frame_np in _generate_chunk(chunk_text, frames_after_eos):
-        # ---- fade-in (may span multiple frames) ----
         if fade_in_remaining > 0:
             n = min(fade_in_remaining, len(frame_np))
             if n > 0:
@@ -499,7 +486,6 @@ def _stream_chunk_faded(chunk_text, frames_after_eos,
                 frame_np[:n] *= fade_in_ramp[start:start + n]
                 fade_in_remaining -= n
 
-        # ---- hold back the last `fade_len` samples ----
         data = (np.concatenate([tail, frame_np])
                 if len(tail) else frame_np)
         if len(data) > fade_len:
@@ -508,7 +494,6 @@ def _stream_chunk_faded(chunk_text, frames_after_eos,
         else:
             tail = data
 
-    # ---- fade-out of the held-back tail ----
     if len(tail) > 0:
         n = min(fade_len, len(tail))
         tail = tail.copy()
@@ -528,7 +513,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
     sample_rate = model.sample_rate
     yield_every = int(sample_rate * YIELD_INTERVAL_SEC)
 
-    # Anti-click fades at chunk boundaries
     fade_len = max(1, int(sample_rate * FADE_MS / 1000))
     fade_in_ramp = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
     fade_out_ramp = fade_in_ramp[::-1].copy()
@@ -627,7 +611,6 @@ def synthesize_streaming(text, max_chars, min_chars, split_on_comma,
                     print(f"  ! last chunk still empty after retry; giving up")
                     continue
 
-        # Short inter-chunk silence to keep prosody natural
         silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
         pending_audio = np.concatenate([pending_audio, silence])
         samples_since_yield += len(silence)
@@ -666,7 +649,6 @@ theme = gr.themes.Soft(
 )
 
 CSS = """
-/* Global RTL */
 .gradio-container {
     direction: rtl !important;
     text-align: right !important;
@@ -718,9 +700,6 @@ CSS = """
     background: rgba(99, 102, 241, 0.08) !important;
     cursor: pointer;
 }
-
-/* Compact output audio player — prevent the huge empty-state icon
-   from pushing controls out of view. */
 #out-audio {
     min-height: 120px !important;
     max-height: 200px !important;
@@ -762,4 +741,120 @@ with gr.Blocks(title="Pocket TTS — فارسی (استریم)") as iface:
                 btn = gr.Button("🎧 تولید", variant="primary",
                                 elem_id="gen-btn", scale=2)
                 stop_btn = gr.Button("⏹ توقف", variant="stop",
-                                     elem_id="stop
+                                     elem_id="stop-btn", scale=1)
+                clear = gr.ClearButton([], value="🧹 پاک کردن", scale=1)
+
+            txt = gr.Textbox(
+                label="متن فارسی",
+                lines=10,
+                placeholder="متن طولانی خود را اینجا وارد کنید...",
+                rtl=True,
+            )
+            clear.click(fn=lambda: "", outputs=txt, queue=False)
+
+            with gr.Accordion("⚙️ تنظیمات قطعه‌بندی", open=False):
+                opt_comma = gr.Checkbox(
+                    label="تقسیم جمله‌ها روی ویرگول (،)",
+                    value=DEFAULT_SPLIT_COMMA,
+                    info="روشن = قطعه‌های کوچک‌تر و شروع سریع‌تر پخش. "
+                         "خاموش = قطعه‌های بزرگ‌تر و روان‌تر.",
+                )
+                opt_max = gr.Slider(
+                    label="حداکثر کاراکتر در هر قطعه",
+                    minimum=20, maximum=500, step=10,
+                    value=DEFAULT_MAX_CHARS,
+                    info="جمله‌های طولانی‌تر از این مقدار، روی حروف ربط و "
+                         "افعال تقسیم می‌شوند.",
+                )
+                opt_min = gr.Slider(
+                    label="ادغام قطعه‌های کوتاه‌تر از",
+                    minimum=0, maximum=100, step=1,
+                    value=DEFAULT_MIN_CHARS,
+                    info="پیشنهاد: ۳۰. قطعه‌های خیلی کوچک را به همسایه‌شان "
+                         "می‌چسباند و از خطاهای مدل جلوگیری می‌کند.",
+                )
+
+            with gr.Accordion("🛠️ تنظیمات مدل و بازیابی", open=False):
+                opt_rescue = gr.Checkbox(
+                    label="بازیابی قطعه‌های بی‌صدا (تلاش مجدد با قطعهٔ بعدی)",
+                    value=DEFAULT_RESCUE,
+                    info="اگر قطعه‌ای صدا تولید نکند، به‌جای حذف، با قطعهٔ "
+                         "بعدی ادغام و دوباره تلاش می‌شود.",
+                )
+                opt_fae = gr.Slider(
+                    label="frames_after_eos",
+                    minimum=0, maximum=16, step=1,
+                    value=DEFAULT_FAE,
+                    info="تعداد فریم‌های مجاز پس از پایان جمله. اگر قطعه‌های "
+                         "کوتاه خالی برمی‌گردند، مقدار ۲ تا ۴ را امتحان کنید.",
+                )
+                opt_eos = gr.Slider(
+                    label="eos_threshold (عدد بزرگ‌تر = توقف زودتر)",
+                    minimum=-8.0, maximum=-1.0, step=0.5,
+                    value=DEFAULT_EOS_THRESHOLD,
+                    info="اگر خطای «به حداکثر طول رسید بدون EOS» زیاد دیده "
+                         "می‌شود، به سمت ‎-۳٫۰ یا ‎-۲٫۰ بیایید.",
+                )
+
+            with gr.Accordion("🎚️ تنظیمات صدا", open=False):
+                opt_voice = gr.Audio(
+                    label="فایل صدای مرجع (اختیاری، حداکثر ۵ ثانیه)",
+                    sources=["upload"],
+                    type="filepath",
+                )
+                voice_status = gr.Markdown(
+                    f"ℹ️ صدای پیش‌فرض فعال است: `{DEFAULT_VOICE_PATH}`"
+                )
+                with gr.Row():
+                    btn_voice_set = gr.Button("بارگذاری صدای جدید", size="sm")
+                    btn_voice_reset = gr.Button("بازگشت به پیش‌فرض", size="sm")
+
+        with gr.Column(scale=5):
+            gr.Markdown("### صدای تولیدشده")
+            out_audio = gr.Audio(
+                label="",
+                type="numpy",
+                autoplay=True,
+                streaming=True,
+                elem_id="out-audio",
+            )
+            gr.Markdown(
+                """
+                <div style="opacity:.7;font-size:13px;line-height:1.8;
+                            margin-top:8px;">
+                💡 نکته‌ها:
+                <ul style="margin-top:4px;padding-inline-start:20px;">
+                    <li>پخش بلافاصله پس از آماده شدن اولین قطعه آغاز می‌شود.</li>
+                    <li>برای دانلود فایل WAV، از دکمهٔ دانلود در پخش‌کنندهٔ
+                        صدا استفاده کنید.</li>
+                </ul>
+                </div>
+                """
+            )
+
+    btn_voice_set.click(
+        fn=set_voice,
+        inputs=opt_voice,
+        outputs=voice_status,
+    )
+    btn_voice_reset.click(
+        fn=reset_voice,
+        inputs=None,
+        outputs=voice_status,
+    )
+
+    gen_event = btn.click(
+        fn=synthesize_streaming,
+        inputs=[txt, opt_max, opt_min, opt_comma,
+                opt_rescue, opt_fae, opt_eos],
+        outputs=out_audio,
+    )
+    stop_btn.click(fn=None, inputs=None, outputs=None, cancels=[gen_event])
+
+
+iface.queue().launch(
+    server_name="0.0.0.0",
+    server_port=7860,
+    theme=theme,
+    css=CSS,
+)
